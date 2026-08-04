@@ -138,6 +138,7 @@ void M_Shutdown(void);
 void UpdateMouse(void);
 void ResetMouse(void);
 int  MouseGetClick(short *x, short *y);
+int  MouseGetDrag(short *x, short *y);
 void MouseHide(void);
 void MouseShow(void);
 extern byte    lastscan;

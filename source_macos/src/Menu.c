@@ -601,11 +601,20 @@ void MenuRight(void)
  }
 
 
+/* Enter and Esc act once per press.  KBDELAY2 alone only throttles the repeat
+   to 5 ticks (~143ms), so holding Enter to pick a character executed a second
+   time on the difficulty menu that press had just opened, and the game started
+   at whatever difficulty the cursor defaulted to.  The arrow keys below keep
+   repeating on purpose. */
+static bool enterheld, escheld;
+
 void MenuCommand(void)
 {
 
- if (keyboard[SC_ESCAPE] && timecount>timedelay)
+ if (!keyboard[SC_ESCAPE]) escheld=false;
+ else if (!escheld && timecount>timedelay)
   {
+   escheld=true;
    downlevel=true;
    timedelay=timecount+KBDELAY2;
    }
@@ -626,8 +635,10 @@ void MenuCommand(void)
  if (keyboard[SC_RIGHTARROW] && timecount>timedelay) goright=true;
   else if (keyboard[SC_LEFTARROW] && timecount>timedelay) goleft=true;
 
- if (keyboard[SC_ENTER] && timecount>timedelay)
+ if (!keyboard[SC_ENTER]) enterheld=false;
+ else if (!enterheld && timecount>timedelay)
   {
+   enterheld=true;
    menuexecute=true;
    timedelay=timecount+KBDELAY2;
    }
@@ -958,26 +969,29 @@ void MenuAnimate(void)
 
 void CheckMouse(void)
 {
- int      i;
+ int      i, clicked;
  short    x, y;
  cursor_t *c;
 
- if (!MouseGetClick(&x,&y)) return;
+ clicked=MouseGetClick(&x,&y);
+ if (clicked)
+  for(i=0;i<menumax[menulevel];i++)
+   {
+    c=&cursors[menulevel][i];
+    if (x<c->x+c->w && x>c->x &&
+	y<c->y+c->h && y>c->y)
+     {
+      menucursor=i;
+      MenuShowCursor(menucursor);
+      menuexecute=true;
+      return;
+      }
+    }
 
- for(i=0;i<menumax[menulevel];i++)
-  {
-   c=&cursors[menulevel][i];
-   if (x<c->x+c->w && x>c->x &&
-       y<c->y+c->h && y>c->y)
-    {
-     menucursor=i;
-     MenuShowCursor(menucursor);
-     menuexecute=true;
-     return;
-     }
-   }
-
- if (menulevel==4)
+ /* The sliders are dragged, so they need the held button state MouseGetClick
+    no longer reports.  The arrows below stay on the press, or one click on
+    them toggles the setting every frame. */
+ if (menulevel==4 && (clicked || MouseGetDrag(&x,&y)))
   {
    switch (menucursor)
     {
@@ -1001,7 +1015,7 @@ void CheckMouse(void)
       break;
      case 4:
      case 5:
-      if (y>=62 && y<=70)
+      if (clicked && y>=62 && y<=70)
        {
 	if (x>=50 && x<=61) goleft=true;
 	else if (x>=72 && x<=83) goright=true;
@@ -1044,6 +1058,10 @@ void ShowMenu(int n)
  byte *scr;
 
  timedelay=timecount+KBDELAY2;
+ /* Assume held until seen released, so the keypress that opened the menu
+    cannot also pick something inside it. */
+ enterheld=true;
+ escheld=true;
  INT_TimerHook(MenuCommand);
 
  scr=(byte *)malloc(64000);

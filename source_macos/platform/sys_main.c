@@ -35,6 +35,7 @@ void Sys_RefreshKeys(void);
 void Sys_HandleTextInput(const char *text);
 void Sys_HandleKeyDown(int sdl_scancode, int shift, int caps);
 void Sys_HandleMouseMotion(float dx, float dy);
+void Sys_HandleMouseButtonDown(float x, float y);
 void Sys_VideoShutdown(void);
 void Sys_SoundShutdown(void);
 
@@ -79,6 +80,13 @@ static void handle_event(const SDL_Event *ev)
 
     case SDL_EVENT_MOUSE_MOTION:
         Sys_HandleMouseMotion(ev->motion.xrel, ev->motion.yrel);
+        break;
+
+    /* The menus need the press itself, not the button's held state -- see the
+       comment on MouseGetClick. */
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        if (ev->button.button == SDL_BUTTON_LEFT)
+            Sys_HandleMouseButtonDown(ev->button.x, ev->button.y);
         break;
 
     default:

@@ -161,6 +161,23 @@ recursion through `AsanInitInternal` → `malloc` → `AsanInitFromRtl` — and 
 verification section's sanitiser step is therefore not available; `build-debug` plus macOS crash
 reports is the fallback.
 
+**One press advanced two menu levels.** Choosing a character went straight into the game at whatever
+difficulty the cursor happened to sit on. Both input paths were level-triggered, and `ShowMenu`'s one
+`do { ... } while (!quitmenu)` loop spent a single press twice — the character boxes and the difficulty
+boxes overlap on screen, so the same coordinates hit both.
+
+- *Mouse.* DOS's `MouseGetClick` called INT 33h **AX=06h**, "get button release information", which
+  returns the presses since the previous call *and resets the counter as it does so* — edge-triggered
+  and self-consuming in one call. That is the entire reason `CheckMouse` carries no debounce of its
+  own. The port replaced it with `SDL_GetMouseState`, which reports the button down on every frame it
+  is held. Restored the edge behaviour by latching `SDL_EVENT_MOUSE_BUTTON_DOWN` in `sys_input.c` and
+  having `MouseGetClick` consume the latch. The option-menu sliders are *dragged*, not clicked, so they
+  moved to a new `MouseGetDrag()` holding the old held-state body.
+- *Keyboard.* `MenuCommand` polled `keyboard[SC_ENTER]` gated only by `timedelay=timecount+KBDELAY2`,
+  i.e. a 5-tick (~143 ms) auto-repeat. This one is verbatim DOS, not a port regression, but it produces
+  the same symptom: a 4-second hold measurably ran new game → cyborg → difficulty in one go. Enter and
+  Esc now need a release before they fire again; the arrow keys keep repeating on purpose.
+
 Also fixed, unrelated to word size:
 - `D_global.h` include guard typo (`GLOBAl_H` vs `GLOBAL_H`) meant it never guarded.
 - `MS_Error` printed and *returned*, letting callers run on the null pointer that caused the error. Now exits.
@@ -216,6 +233,13 @@ Also fixed, unrelated to word size:
   mission-results screen, whose stats now draw before the fade instead of popping in after it.
   Redrawing text each step is safe because `FN_RawPrint3` writes `fontbasecolor+b` into the pixel
   rather than blending.
+- **2026-08-04** — User reports that picking a character immediately picks a difficulty. Fixed both
+  input paths (above). Verified by scripting input from inside `Sys_Frame` behind an env var and
+  dumping the framebuffer to PPM at each step, since macOS blocks `osascript` from sending keystrokes
+  to the window. The same harness run against the *old* keyboard logic reproduced the report exactly —
+  one 4s hold, three `Execute` calls — which is what makes the after-state worth believing. Note
+  `-nointro` cannot test any of this: it skips the menu entirely and calls `newplayer(0,0,2)` direct,
+  so the test opens the in-game Esc menu instead, which is the same `ShowMenu`.
 - **2026-08-04** — Added a top-level `.gitignore` (`.DS_Store`, `build/`, `build-*/`, `*.dSYM/`, editor
   dirs), so `git status` shows only real sources. Note what this exposes: **none of `source_macos/` is
   committed yet** — the whole port is still untracked working-tree state on top of the 2022 import.

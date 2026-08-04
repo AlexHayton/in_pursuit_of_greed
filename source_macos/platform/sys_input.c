@@ -31,6 +31,10 @@ static int  mouselook_on;
 static int  accum_dx, accum_dy;   /* relative motion since last read */
 static int  warp_pending;
 
+/* One unconsumed menu click.  See MouseGetClick. */
+static int   click_pending;
+static short click_x, click_y;
+
 
 static void build_keymap(void)
 {
@@ -258,21 +262,19 @@ void ResetMouse(void)
 {
     accum_dx = 0;
     accum_dy = 0;
+    /* DOS's ResetMouse zeroed b1/b2 as well, so a click that dismissed one
+       screen could not still be pending when the next one opened. */
+    click_pending = 0;
 }
 
 
-/* Menu code asks for a click in 320x200 screen coordinates.  Map the window
-   position back through the same 4:3 letterbox the renderer presents into. */
-int MouseGetClick(short *x, short *y)
+/* Menu code asks for positions in 320x200 screen coordinates.  Map the window
+   position back through the same 4:3 letterbox the renderer presents into.
+   Returns 0 for a point outside the letterbox. */
+static int map_to_screen(float mx, float my, short *x, short *y)
 {
-    float mx, my;
     int   winw, winh;
     float scale, boxw, boxh, boxx, boxy;
-    SDL_MouseButtonFlags buttons;
-
-    buttons = SDL_GetMouseState(&mx, &my);
-    if (!(buttons & SDL_BUTTON_LMASK))
-        return 0;
 
     SDL_GetWindowSize(Sys_GetWindow(), &winw, &winh);
 
@@ -292,6 +294,51 @@ int MouseGetClick(short *x, short *y)
     if (y) *y = (short)((my - boxy) / boxh * 200.0f);
 
     return 1;
+}
+
+
+void Sys_HandleMouseButtonDown(float x, float y)
+{
+    if (map_to_screen(x, y, &click_x, &click_y))
+        click_pending = 1;
+}
+
+
+/* One press, one click.
+
+   DOS asked INT 33h AX=06h, "get button release information", which reported
+   the presses since the previous call and reset the counter as it did so --
+   edge triggered and self consuming in the one call.  That is why CheckMouse
+   has no debounce of its own.  Polling SDL_GetMouseState instead, as this port
+   first did, reports the button as down on every frame it is held, and
+   ShowMenu's loop then spends a single click on two menu levels: the character
+   boxes and the difficulty boxes overlap, so choosing a character also chose a
+   difficulty and started the game.  Latch the press event instead. */
+int MouseGetClick(short *x, short *y)
+{
+    if (!click_pending)
+        return 0;
+
+    click_pending = 0;
+    if (x) *x = click_x;
+    if (y) *y = click_y;
+
+    return 1;
+}
+
+
+/* Held state, for the option-menu sliders: those are dragged, not clicked, so
+   they cannot use the one-shot latch above. */
+int MouseGetDrag(short *x, short *y)
+{
+    float mx, my;
+    SDL_MouseButtonFlags buttons;
+
+    buttons = SDL_GetMouseState(&mx, &my);
+    if (!(buttons & SDL_BUTTON_LMASK))
+        return 0;
+
+    return map_to_screen(mx, my, x, y);
 }
 
 
