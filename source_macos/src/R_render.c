@@ -109,6 +109,38 @@ int      entrycounter;
 int      fxtimecount;
 extern int rtimecount;
 
+/* Project a view-space offset to a screen offset in pixels: (v*scale)>>32.
+
+   The engine spells this FIXEDMUL(v,scale)>>FRACBITS, and FIXEDMUL's result is
+   a 32-bit fixed_t.  `scale` is SCALE/tz, so it grows with both the projection
+   and the nearness of the vertex -- and at an HD projection the intermediate
+   overflows: measured 5,905,489,856 against an INT_MAX of 2,147,483,647, 48
+   times in a single frame.  The wrapped value lands ceilingy somewhere absurd,
+   the ceiling polygon's screen extent is nonsense, and because floor and
+   ceiling spans are drawn after all walls it paints straight over them -- the
+   wall band vanishes.
+
+   The same scene at 320x200 peaks at 1,342,156,768, i.e. 62% of the range: the
+   original engine was already close to the edge, and 4.4x the projection scale
+   simply runs out.
+
+   Keeping the whole product in 64 bits and saturating well outside any view
+   preserves every coordinate that can be represented and only pins the ones
+   that were previously wrapping.  RenderPolygon's edge walk already does its
+   own arithmetic in 64 bits, so a large value here is safe downstream. */
+#define PROJLIMIT 0x00FFFFFF
+
+int ProjectOffset(fixed_t v, fixed_t scale)
+{
+ int64_t m;
+
+ m=(((int64_t)v*(int64_t)scale)>>(FRACBITS*2));
+ if (m> (int64_t)PROJLIMIT) m= (int64_t)PROJLIMIT;
+ if (m<-(int64_t)PROJLIMIT) m=-(int64_t)PROJLIMIT;
+ return (int)m;
+ }
+
+
 vertex_t *TransformVertex(int tilex, int tiley)
 /* Returns a pointer to the vertex for a given coordinate
    tx,tz will be the transformed coordinates
@@ -134,9 +166,7 @@ vertex_t *TransformVertex(int tilex, int tiley)
  if (framevalid[mapspot2]==frameon && framefl[mapspot2]==fl && framech[mapspot2]==ch)
   return cornervertex[mapspot2];
  point=vertexlist_p++;
-#ifdef VALIDATE
  if (point==&vertexlist[MAXVISVERTEXES]) MS_Error("Vertexlist overflow (%i>=%i)",vertexlist_p-vertexlist,MAXVISVERTEXES);
-#endif
  point->floorheight=fl;
  point->ceilingheight=ch;
  trx=(tilex<<(FRACBITS+TILESHIFT))-viewx;
@@ -146,9 +176,9 @@ vertex_t *TransformVertex(int tilex, int tiley)
  if (point->tz>=MINZ)
   {
    scale=FIXEDDIV(SCALE,point->tz);
-   point->px=CENTERX+(FIXEDMUL(point->tx,scale)>>FRACBITS);
-   point->floory=CENTERY-(FIXEDMUL(point->floorheight,scale)>>FRACBITS);
-   point->ceilingy=CENTERY-(FIXEDMUL(point->ceilingheight,scale)>>FRACBITS);
+   point->px=CENTERX+ProjectOffset(point->tx,scale);
+   point->floory=CENTERY-ProjectOffset(point->floorheight,scale);
+   point->ceilingy=CENTERY-ProjectOffset(point->ceilingheight,scale);
    }
  framevalid[mapspot2]=frameon;
  cornervertex[mapspot2]=point;
@@ -281,9 +311,7 @@ void RenderTileWalls(entry_t *e)
        entry_p->counter=entrycounter;
        entrycount[entry_p->mapspot]=entrycounter;
        ++entry_p;
-#ifdef VALIDATE
        if (entry_p>=&entries[MAXENTRIES]) MS_Error("Entry Array OverFlow (%i>=%i)",entry_p-entries,MAXENTRIES);
-#endif
        }
      }
    }

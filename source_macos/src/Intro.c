@@ -219,9 +219,20 @@ void Wait(longint time)
 	t = timecount + time;
 	/* Sys_Frame both pumps SDL events and advances timecount, so this is the
 	   spin that actually lets the clock move.  The Win32 original pumped the
-	   message queue here while a separate timer thread drove timecount. */
+	   message queue here while a separate timer thread drove timecount.
+
+	   It is also where quitgame gets set, by Cmd-Q or the window's close box.
+	   Abandoning the delay there is what makes quitting prompt from the intro,
+	   the briefings and the credits: nearly every pause in those is a Wait, and
+	   sitting out a two second hold or a 64 step fade at every one of them adds
+	   up to seconds before anybody looks at the flag.  Callers see the delay as
+	   having elapsed, which is safe -- the fades set their final palette after
+	   their loop, so none is left half applied. */
 	while ( !CheckTime(timecount,t) )
+	{
 		Sys_Frame();
+		if (quitgame) return;
+	}
 }
 
 
@@ -236,6 +247,7 @@ void ShowPortrait(int n)
  font=font1;
  for(i=0;i<27;i++)
   {
+   if (quitgame) return;
    UpdateSound();
    for(fontbasecolor=0;fontbasecolor<9;++fontbasecolor)
     if (charinfo[n-1][i][0]!='.')
@@ -254,6 +266,7 @@ void ShowPortrait(int n)
    }
  for(i=0;i<50;i++)
   {
+   if (quitgame) return;
    UpdateSound();
    Wait(35);
    if (activatemenu)
@@ -315,6 +328,10 @@ void DoIntroMenu(void)
 
 bool CheckDemoExit(void)
 {
+ /* Cmd-Q and the close box set quitgame from inside the event pump.  Reporting
+    it here covers every step of MainIntro at once -- it already asks after each
+    screen and each movie. */
+ if (quitgame) return true;
  if (activatemenu)
   {
    activatemenu=false;
@@ -781,7 +798,11 @@ restart:
 			newplayer(SC.netmap,0,SC.netdifficulty);
 		else
 			newplayer(0,0,2);
-		maingame();
+		/* newplayer runs the mission briefing, which the player can quit out
+		   of.  InitData clears quitgame, so without this the quit is swallowed
+		   and the game starts anyway. */
+		if (!quitgame)
+			maingame();
 	}
 	else
 		intro();

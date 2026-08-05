@@ -40,6 +40,52 @@ fixed_t CENTERX=INIT_VIEW_WIDTH/2;
 fixed_t CENTERY=INIT_VIEW_HEIGHT/2;
 fixed_t SCALE;
 fixed_t ISCALE;
+/* Active render mode, 0 = original 320x200, 1 = HD.  SC.hdmode is the saved
+   setting; this is what the renderer is currently built for, and only VI_Init
+   and the mode switch may change it. */
+int     hdmode;
+/* Projection scale in pixels, as set by SetViewSize.  InitWalls needs the same
+   number and runs separately. */
+int     viewproj = INIT_VIEW_WIDTH/2;
+/* Look up/down range in view rows, kept as a fraction of the view height so it
+   means the same thing at any render resolution.  See VIEWSCROLL. */
+int     viewscroll = VIEWSCROLL(INIT_VIEW_HEIGHT);
+/* ZClipPolygon throws away a ceiling polygon whose projected vertex lands
+   absurdly far below the view.  The bound was a flat 640 rows, which is 4x the
+   projection scale at 320x200 -- but the magnitude it guards is
+   clipty*SCALE/z, so it grows with the projection, and at an HD scale of 659
+   the fixed 640 starts rejecting ordinary ceilings.  Kept at exactly 640 for
+   every original view size, and scaled with the projection in HD. */
+int     viewclipy = 640;
+/* The near cutoff DrawWall/DrawSteps apply to the texel step.  The step is
+   proportional to 1/projection, so a flat 1000 culls four times further out at
+   an HD scale than it does at 320x200.  Exactly 1000 when the projection is
+   160. */
+int     viewminscale = 1000;
+/* Where the 2D chrome -- status bar, weapon, HUD, map modes, messages -- is
+   drawn.  In original mode that is the view buffer itself, because the engine
+   composites everything into viewbuffer and RF_BlitView copies the lot to
+   `screen`.  In HD the view buffer is a different size to the 320x200 artwork,
+   so the chrome goes to `screen` instead and is composited over the view as a
+   second, colour-keyed layer at present time.
+
+   Assigning the array addresses, not their contents: ylookup is filled in
+   VI_Init, which runs after the first SetViewSize. */
+byte    **hudylookup = (byte **)viewylookup;
+/* The main 3D view size, as distinct from whatever SetViewSize was last handed:
+   RearView switches to a 64x64 camera and has to switch back, and in HD the
+   size to come back to is not an entry in viewSizes[]. */
+int     mainViewWidth = INIT_VIEW_WIDTH;
+int     mainViewHeight = INIT_VIEW_HEIGHT;
+int     hudWidth = INIT_VIEW_WIDTH;
+int     hudHeight = INIT_VIEW_HEIGHT;
+/* Set by RF_BlitView when a new 3D frame is ready, cleared by VI_BlitView once
+   it has been presented.  It is how the present path tells "the play loop just
+   rendered" from "a menu or a fade is showing `screen`", without every one of
+   those callers having to say so. */
+int     hdviewfresh;
+/* Set when the window's pixel size changed; consumed at a frame boundary. */
+int     hdresizepending;
 int     backtangents[TANANGLES*2];
 int     autoangle2[MAXAUTO][MAXAUTO];
 int     scrollmin, scrollmax, bloodcount, metalcount;
@@ -527,6 +573,7 @@ void RF_RenderView(fixed_t x, fixed_t y, fixed_t z, int angle)
 void SetViewSize(int width, int height)
 {
  int i;
+ int proj;
 
  if (width>MAX_VIEW_WIDTH) width = MAX_VIEW_WIDTH;
  if (height>MAX_VIEW_HEIGHT) height = MAX_VIEW_HEIGHT;
@@ -536,8 +583,33 @@ void SetViewSize(int width, int height)
  scrollmax=windowHeight+scrollmin;
  CENTERX=width/2;
  CENTERY=height/2;
- SCALE=(width/2)<<FRACBITS;
- ISCALE=FRACUNIT/(width/2);
+
+ /* The projection scale, in pixels.  It was spelled width/2 everywhere below,
+    which is right for a view that is always shown in a 4:3 box: shrinking the
+    view then narrows the field of view without changing the zoom.
+
+    HD keeps ONE uniform projection -- TransformVertex derives px, floory and
+    ceilingy from a single SCALE, so splitting it would mean classifying a
+    dozen call sites as horizontal or vertical -- and instead takes the scale
+    from the height, with the buffer made 1.2*aspect as wide as it is tall.
+    Presenting that buffer stretched to fill the display reproduces exactly the
+    1.2 vertical stretch that 320x200-in-a-4:3-box already has, so the vertical
+    field of view stays 64 degrees at every aspect and only the horizontal
+    opens up (90 degrees at 4:3, 100 at 16:10, 106 at 16:9).
+
+    320x200 is precisely the 4:3 case of that rule -- 0.8*200 == 320/2 == 160 --
+    so original mode is unchanged, not merely unchanged in intent. */
+ if (hdmode) proj = (height*4)/5;
+  else proj = width/2;
+ viewproj=proj;
+ viewscroll=VIEWSCROLL(height);
+ if (viewscroll<1) viewscroll=1;
+ viewclipy = hdmode ? (640*proj)/(INIT_VIEW_WIDTH/2) : 640;
+ if (getenv("NOCLIPY")) viewclipy=1<<28;
+ viewminscale = (1000*(INIT_VIEW_WIDTH/2))/proj;
+ if (getenv("NOMINSCALE")) viewminscale=0;
+ SCALE=proj<<FRACBITS;
+ ISCALE=FRACUNIT/proj;
 
  for (i=0;i<height;i++)
   viewylookup[i] = viewbuffer + i * width;
@@ -545,11 +617,24 @@ void SetViewSize(int width, int height)
 // slopes for rows and collumns of screen pixels
 // slightly biased to account for the truncation in coordinates
  for(i=0;i<=width;i++)
-  xslope[i]=rint((float)(i+1-CENTERX)/CENTERX*FRACUNIT);
- for(i=-MAXSCROLL;i<height+MAXSCROLL;i++)
-  yslope[i+MAXSCROLL] = rint(-(float)(i-0.5-CENTERY)/CENTERX*FRACUNIT);
+  xslope[i]=rint((float)(i+1-CENTERX)/proj*FRACUNIT);
+ for(i=-viewscroll;i<height+viewscroll;i++)
+  yslope[i+viewscroll] = rint(-(float)(i-0.5-CENTERY)/proj*FRACUNIT);
  for(i=0;i<TANANGLES*2;i++)
-  backtangents[i]=((width/2)*tangents[i])>>FRACBITS;
+  backtangents[i]=(proj*tangents[i])>>FRACBITS;
  hfrac=FIXEDDIV(BACKDROPHEIGHT<<FRACBITS,(windowHeight/2)<<FRACBITS);
- afrac=FIXEDDIV(TANANGLES<<FRACBITS,width<<FRACBITS);
+ afrac=FIXEDDIV(TANANGLES<<FRACBITS,(2*proj)<<FRACBITS);
+
+ if (hdmode)
+  {
+   hudylookup=ylookup;
+   hudWidth=SCREENWIDTH;
+   hudHeight=SCREENHEIGHT;
+   }
+ else
+  {
+   hudylookup=(byte **)viewylookup;
+   hudWidth=windowWidth;
+   hudHeight=windowHeight;
+   }
  }

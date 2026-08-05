@@ -18,6 +18,11 @@ which of those have been *watched* and which merely no longer fail.
 | 3 — Audio (SFX + libxmp music) | **done** | Confirmed audible by the user |
 | 4 — Modernised controls | **done, untuned** | WASD + mouse look work now the `bool` fix has revived the keyboard; sensitivity has had no tuning pass |
 | 5 — `Greed.app` bundle | **done** | Fully static, icon, licences; runs from any cwd |
+| 6a — Retina presentation | **done** | `HIGH_PIXEL_DENSITY` + `PIXELART`; measured 3024×1898 backing store |
+| 6b — `SETUP.CFG` v2 | **done** | Appended fields; old configs migrate instead of resetting |
+| 6c — Display options | **done** | Screen size row replaced by RENDERER / FULLSCREEN |
+| 6d — Span tag widened | **done** | 64-bit tag, `MAXSPANS` 4096→262144, overflow guards now compiled in |
+| 6e — HD renderer | **done** | Native aspect + capped native resolution; HD is the default |
 
 Build and run, for the record — there is **no bare `build/greed`**; `MACOSX_BUNDLE` means the binary
 lives inside the app:
@@ -178,6 +183,52 @@ boxes overlap on screen, so the same coordinates hit both.
   the same symptom: a 4-second hold measurably ran new game → cyborg → difficulty in one go. Enter and
   Esc now need a release before they fire again; the arrow keys keep repeating on purpose.
 
+**The same held key ran the whole mission briefing, and the whole end-game sequence.** Every briefing
+page, end-game text page and credits screen ended in `for(;;){Wait(10); if (newascii) break;}`. Nothing
+there consumes the key, so the auto-repeat kept re-latching `newascii` and one held key ran the pages
+together. Measured: one press consumed all six pages of the map-0 briefing, and a 13-second hold ran
+four of `EndGame1`'s five screens back to back. The briefings had it worse, because they clear
+`newascii` *before* the page fades in rather than after, so the repeat had the whole ~1.8s fade — plus
+the tail of the press that turned the previous page — to latch in as well.
+
+All 26 loops (11 in `MissionBriefing`, 5 each in `EndGame1/2/3`) now call `BriefingWaitKey()`, which
+waits for every ASCII-producing key to be seen released before it accepts a press. Modifiers are
+skipped (no `ASCIINames` entry, so they cannot set `newascii`) or the screen would hang for anyone
+resting a finger on shift. Esc is exempt from the debounce: `MissionBriefing` follows the wait with
+`if (lastascii==27) goto end`, so debouncing it would cost a second press to leave, and it cannot run
+pages together because it exits the function outright. The end-game callers keep their `newascii=false`
+immediately before the call, which is what stops a stale Esc reaching the exemption there.
+
+**Cmd-Q only worked while you were actually playing.** `quitgame` was only ever tested by `PlayLoop`'s
+`while (!quitgame)` and by `intro()` after each portrait, because in DOS nothing could set it
+asynchronously — it came from the menu's own Quit item, reached from a loop that was about to exit
+anyway. The port gave it two asynchronous sources (Cmd-Q and the window's close box, both in
+`handle_event`), and every other blocking screen ignored it: intro movies, briefings, end-game and
+credits, the menu, the help pages, the save-name field, the pause screen. Measured: SIGTERM — which SDL
+turns into `SDL_EVENT_QUIT`, the same flag Cmd-Q sets — left the process running through a mission
+briefing until it was SIGKILLed 25s later.
+
+Two mechanisms, because the loops divide into two kinds:
+
+- *Waiting on time.* `Wait()` now abandons the delay when `quitgame` is set. Nearly every pause in
+  those screens is a `Wait`, so this alone collapses fades, caption ramps, FLI frame pacing and the
+  two-second holds. Callers see the delay as having elapsed, which is safe — the fades set their final
+  palette after their loop, so none is left half applied.
+- *Waiting on input.* Those never terminate on their own, and with `Wait` short-circuited they would
+  spin instead of hang, which is no better. Each one tests `quitgame` in its own condition:
+  `BriefingWaitKey`, `ShowMenu`, `ShowHelp`, `ShowQuit`, `ShowSaveDir`'s name field, `ShowPause`,
+  `MenuAnimate`, and `playfli`'s frame loop.
+
+`CheckDemoExit()` reports `quitgame` too, which covers every step of `MainIntro` at once — it already
+asks after each screen and each movie. `MissionBriefing` folds it into the `if (lastascii==27) goto
+end` it already had at each page. And `startup()`'s `-nointro` path now guards its `maingame()` call:
+`newplayer` runs the briefing, `InitData` clears `quitgame`, so a quit taken during that briefing was
+otherwise swallowed and the game started anyway.
+
+Not touched: `NetWaitStart`'s multiplayer sync loop, which has its own 10-minute timeout and reports
+cancellation through `MS_Error`. Quitting mid-sync would want a different answer than an error box, and
+netmode is not testable here.
+
 Also fixed, unrelated to word size:
 - `D_global.h` include guard typo (`GLOBAl_H` vs `GLOBAL_H`) meant it never guarded.
 - `MS_Error` printed and *returned*, letting callers run on the null pointer that caused the error. Now exits.
@@ -240,6 +291,34 @@ Also fixed, unrelated to word size:
   one 4s hold, three `Execute` calls — which is what makes the after-state worth believing. Note
   `-nointro` cannot test any of this: it skips the menu entirely and calls `newplayer(0,0,2)` direct,
   so the test opens the in-game Esc menu instead, which is the same `ShowMenu`.
+- **2026-08-05** — Carried the menu's keypress debounce into `MissionBriefing` (above), and made a
+  press *during* a fade snap it to the end instead of being swallowed: `if (newascii) i=steps;` in
+  `BriefingFadeInPage`, and the same jump in the three `fontbasecolor` caption ramps and the
+  mission-results stats fade. Jumping the counter rather than breaking means the final step still runs,
+  so the snapped page is left in exactly the state a completed fade leaves it in — checked by dumping
+  both to PPM, they are byte-identical. The press is not spent on the snap; `BriefingWaitKey` still
+  wants one of its own to turn the page, matching the screen's own "PRESS SPACE BAR TO CONTINUE".
+  Verified with the same `Sys_Frame` input-scripting harness as the menu fix, driving `MissionBriefing(0)`
+  straight from `startup()` (the menu route is slow and `-nointro` returns early). Measured, with the
+  old loop restored behind an env var for the before/after: one 4s hold spent all six pages before,
+  exactly one after; a tap 600ms into a fade ended it at 653ms against an uninterrupted 1792ms; a
+  caption ramp ran 2 of 9 steps when held through, 9 of 9 when not.
+- **2026-08-05** — Same debounce carried into `EndGame1/2/3` (15 more loops), which had the identical
+  pattern. Verified the same way, driving `EndGame1()` from `startup()`: a 13s hold ran screens 1–4
+  back to back before the fix and **zero** after, with discrete presses then advancing exactly one
+  screen each. Two notes from writing that harness. `EndGame1` never sets `font` — it inherits it from
+  the play loop, so calling it cold segfaults in `FN_PrintCentered`; that is fine in the real flow but
+  worth knowing. And unlike the briefings, these screens clear `newascii` *after* `VI_FadeIn` rather
+  than before, so a press during their fade was always discarded — left as is, since changing it would
+  mean making `VI_FadeIn` interruptible and that is shared with the intro and menus.
+- **2026-08-05** — User reports Cmd-Q does nothing. `quitgame` now honoured everywhere (above).
+  Verified with SIGTERM, which SDL delivers as `SDL_EVENT_QUIT` and so exercises the identical flag
+  without needing synthetic keystrokes — macOS blocks those, so this is the only way to test the quit
+  path from a script. Signalled at four points in the normal run (intro movies at 5s, intro screens at
+  20s, portrait/menu cycle at 45s, in-game via `-nointro` at 12s) and, through a temporary hook that
+  called them directly, in the briefing, the menu, the help page and `EndGame1` during both its movies
+  and its credits. Every case exits **0.2–0.7s** after the signal with the screen's function returning
+  normally, against the briefing before the fix surviving to a SIGKILL 25s later.
 - **2026-08-04** — Added a top-level `.gitignore` (`.DS_Store`, `build/`, `build-*/`, `*.dSYM/`, editor
   dirs), so `git status` shows only real sources. Note what this exposes: **none of `source_macos/` is
   committed yet** — the whole port is still untracked working-tree state on top of the 2022 import.
@@ -569,6 +648,291 @@ Greed.app/Contents/
   port still needs nothing but CMake and a compiler.
 - Include SDL3's and libxmp's licence texts in `Resources/licenses/`, copied from the exact fetched
   trees that were linked against.
+
+---
+
+## Phase 6 — Retina presentation, fullscreen, display options
+
+### 6a — Retina + fullscreen by default (**done**, 2026-08-04)
+
+The window was created without `SDL_WINDOW_HIGH_PIXEL_DENSITY`, so SDL pinned the macOS backing store
+to 1× and the compositor bilinearly upscaled that to the panel — the `SDL_SCALEMODE_NEAREST` "chunky
+pixels" intent was being undone by an OS blur applied afterwards. `Info.plist` already had
+`NSHighResolutionCapable`, which is necessary but not sufficient.
+
+- `sys_video.c` `VI_Init`: adds `SDL_WINDOW_HIGH_PIXEL_DENSITY`, and `SDL_WINDOW_FULLSCREEN` when
+  `SC.fullscreen`. Measured on a 14" MBP: window points 1512×949, **pixels 3024×1898**, density 2.00.
+  Before the change points and pixels were equal.
+- `SDL_SyncWindow` right after creation. macOS animates into fullscreen asynchronously and nothing
+  pumps events between `VI_Init` and the first frame, so without it the window reported its
+  pre-transition size and `SDL_GetWindowFlags` still said windowed.
+- Scale mode is now `SDL_SCALEMODE_PIXELART` (SDL ≥ 3.4). At a Retina backing store the 4:3 box is
+  almost never an integer multiple of 320×200 — 3024×1898 gives x 7.9, y 9.49 — and `NEAREST` then
+  makes some source pixels one device pixel wider than their neighbours. `PIXELART` keeps hard edges
+  while sizing every source pixel equally.
+- **The letterbox calculation now exists once.** `Sys_GetPresentRect` in `sys_video.c` is
+  unit-agnostic; `VI_BlitView` passes device pixels (`SDL_GetWindowSizeInPixels`, correct because no
+  logical presentation is set) and `Sys_MapWindowToGame` passes window points (`SDL_GetWindowSize`,
+  correct because SDL reports mouse coordinates in points). `sys_input.c` used to carry a second copy
+  complete with its own `4.0f`/`3.0f`/`320.0f`/`200.0f` literals. With high-DPI on, those two unit
+  systems finally differ, so the duplication had to go before it could desync.
+- Cmd-F / F11 goes through `VI_SetFullscreen` and updates `SC.fullscreen`, so the shortcut and the
+  menu row cannot disagree and the choice survives into the next run.
+
+### 6b — `SETUP.CFG` version 2 (**done**, 2026-08-04)
+
+`SoundCard` gained `fullscreen` and `hdmode`, appended at the end. `LoadSetup` demanded
+`hdr.structsize == sizeof(SoundCard)` exactly, which would have rejected every existing file and reset
+volumes *and* key bindings for the sake of two ints. It now accepts `structsize <= sizeof(SoundCard)`
+for `version <= SETUP_VERSION` and reads only the bytes the file has; `InitSound` assigns the tail's
+defaults **before** calling it. Verified with a synthetic v1 file: `musicvol`/`sfxvol` survived, the
+new tail took its defaults, and bad magic / future version / oversized struct all still fall back.
+
+`SC.screensize` is forced to 0 on load — see 6c.
+
+### 6c — Display options on the options menu (**done**, 2026-08-04)
+
+Menu screens are single pre-rendered 258×174 bitmaps; `cursors[][]` holds only highlight rectangles,
+so a new row needs either free space in the artwork or drawn text. There is no free space: the blank
+strip below the last options row is 8px, and the apparent gap in the left column is the widget
+preview's bevel.
+
+The **screen size** slider was removed and its space reused. It was a 1995 way to buy frame rate by
+rendering less of the view, and it was already broken below full size — `RF_BlitView` (`D_video.c`)
+copies a fixed 320×200 and ignores `windowWidth`/`windowHeight`, unlike the DOS original in
+`RA_DRAW.ASM`. Its row plus the blank strip below is repainted by `MenuShowOptions` and relabelled as
+three drawn rows:
+
+| index | row | control |
+|---|---|---|
+| 7 | `RENDERER` — ORIGINAL / HD | ←/→, or Enter/click to toggle |
+| 8 | `FULLSCREEN` — ON / OFF | as above; applies live |
+| 9 | `CAMERA DELAY` | unchanged slider, moved down |
+| 10 | back | was 9 |
+
+- Labels use `font1` with `fontbasecolor=228`, which maps its 1..6 glyph gradient onto palette indices
+  229..234 — the exact amber ramp the baked labels above are drawn in.
+- Rows 7 and 8 have no widget bitmap and therefore no clickable arrows, so `Execute` toggles them; the
+  current value is also drawn in the preview box at (35,29), matching how the violence and animation
+  rows show their state there as artwork.
+- `MenuShowCursor` now draws contents **before** the highlight rectangle, and `MenuShowOptions` ends
+  with `MenuDrawCursorBox`. With the old order the panel repaint landed on top of the highlight and
+  erased it for exactly the three new rows.
+
+`SC.hdmode` is persisted and settable but **not yet wired to anything** — see 6d.
+
+### 6d — Span tag widened (**done**, 2026-08-04)
+
+This was the blocker for any taller view. A span tag packed depth and the index into `spans[]` into
+one integer so that sorting the tags sorts the spans back to front (descending — see `Partition`).
+It was 32 bits: 20 of z above **12** of index. Every bit was spoken for, so `MAXSPANS` could not be
+raised past 4096 — about 20 spans per scanline at 200 rows, which does not survive 900.
+
+- New `spantag_t` (`unsigned long long`) with a 20-bit index field: `ZSHIFT 20`, `ZTOFRAC 12`,
+  `ZMASK (0xfffffULL<<20)`, `SPANMASK 0xfffffULL`. The z field keeps its width, contents and position
+  *relative to the index*, so the sort order is unchanged. `MAXSPANS` 4096 → 262144, `MAXPEND`
+  3072 → 32768.
+- **The cast at each composition site is load-bearing.** `pointz` is a 32-bit signed `fixed_t` and
+  `pointz<<12` overflows it; all nine sites are now `((spantag_t)pointz<<ZTOFRAC)&ZMASK`, and the six
+  `unsigned span;` locals became `spantag_t`. Nothing warns on the narrowing, so these were found by
+  mapping every declaration to its function rather than by the compiler.
+- Recovery masks before shifting: `(tag&ZMASK)>>ZTOFRAC`. The old layout let the top 8 bits of the
+  index fall into the low bits of the recovered depth, so a floor's texture stepping depended on how
+  many spans happened to precede it in the list. Worst-case depth error is 255/65536 either way — the
+  old one just jittered with list position instead of being a clean floor.
+- **All nine `MAXSPANS exceeded` / `MAXPEND` guards are now unconditional.** They were `#ifdef
+  VALIDATE`, and `VALIDATE` is defined nowhere in this tree, so an overflow wrote past `spans[]` in
+  silence. Verified by building with `MAXSPANS 512` against a frame needing 772: it now stops with
+  `MAXSPANS exceeded, FlatSpan (512>=512)`.
+- Cost: `__common` 1.4 MB → 16.8 MB, all zerofill (`spans[]` 12 MB at 48 bytes/entry, `spantags[]`
+  2 MB, `spansx[]` 1 MB). Address space, not resident memory. Sized generously on purpose — the real
+  peak is unknown until the renderer runs taller, and guessing low is now a loud failure.
+
+Regression checked against a pre-change build at a fixed spawn (deterministic: two runs byte-identical).
+Same `numspans`/`transparentposts` (772/235); **155 of 64000 pixels differ (0.24%)**, 147 of them on one
+ceiling scanline, from the depth-recovery change above. Frames are visually indistinguishable.
+
+### 6e — HD renderer (**done**, 2026-08-04)
+
+`SC.hdmode` now runs the 3D view at the display's own pixel count and aspect.
+
+**The aspect, without splitting the projection.** `TransformVertex` derives `px`, `floory` *and*
+`ceilingy` from a single `SCALE`, so giving the axes independent scales would have meant classifying a
+dozen `FIXEDDIV(SCALE,z)` / `FIXEDMUL(z,ISCALE)` call sites as horizontal or vertical — the most
+error-prone thing in the whole change. It is unnecessary. Keep one uniform projection, take its scale
+from the *height*, and make the buffer `1.2 * aspect` as wide as it is tall; presenting that stretched
+to fill the window reproduces exactly the 1.2 vertical stretch a 320x200 image already gets in a 4:3
+box. Vertical FOV then stays at its original 64 degrees at every aspect and only the horizontal opens
+up — 90 degrees at 4:3, 100 at 16:10, 106 at 16:9. **320x200 is precisely the 4:3 case of that rule**
+(0.8*200 == 320/2 == 160), so `SetViewSize` needed one new `proj` variable, not a fork.
+
+**Compositing.** All 2D chrome — status bar, weapon, HUD, map modes, messages — was drawn into
+`viewbuffer`, which in HD is the wrong size for 320x200 artwork. `hudylookup`/`hudWidth`/`hudHeight`
+now name the chrome's target: the view buffer in original mode, `screen` in HD. Because they *alias*
+the originals in original mode, the retargeting across `Display.c`, `D_font.c`, `D_video.c` and
+`Raven.c` is provably a no-op there, which the golden test confirmed. In HD the chrome is uploaded as
+a second 320x200 texture over the view, keyed on palette index 0 — already the engine's "nothing
+drawn" value, since every `VI_DrawMaskedPic*` skips it.
+
+**Telling a 3D frame from a menu.** `RF_BlitView` sets `hdviewfresh`; `VI_BlitView` clears it after
+presenting the two layers. Without a fresh frame it is a menu, fade or cutscene showing `screen`
+directly, which takes the ordinary 4:3 path. This avoids threading a mode flag through every menu,
+fade and cutscene entry point. After presenting, `VI_BlitView` composes the view down into `screen`
+wherever the chrome left a hole, so the snapshot those callers take is the last visible frame.
+
+**Traps hit on the way:**
+- `newplayer` walks `ChangeViewSize` up and down four times to force the tables to rebuild, which put
+  the view straight back to 320x200. `ChangeViewSize` is now a no-op in HD, where the render
+  resolution replaces `viewSizes[]` entirely.
+- `RearView` renders a 64x64 square camera and restored the view with `viewSizes[currentViewSize]`,
+  which is not the HD size. It now saves/clears `hdmode` for the square projection and restores via
+  `mainViewWidth/Height`.
+- `Playfli` decoded FLI frames through `viewylookup` while the whole-frame reader and the flip both
+  treat `viewbuffer` as packed 320x200. Given an explicit `SCREENWIDTH` stride.
+- Composing into `screen` inside `RF_BlitView` — the obvious place — makes the overlay fully opaque
+  and hides the view. It has to happen after the overlay has been read out.
+
+**Sky.** The `windowWidth - 257` backdrop phase term compensates for the left/right branch sign flip
+at the view midpoint, where `backtangents[TANANGLES/2]` is the projection scale. It is now
+`2*viewproj - 1`, which is congruent mod 256 to the old form for *every* original view size (proj is
+width/2 there) and correct in HD. The two halves meet with the same constant 1-pixel step at any
+projection scale — checked analytically and by eye on map 15.
+
+**Measured**, 3024x1898 window on an M-series Mac, at spawn on map 0:
+
+| mode | view | pixels | vsynced | uncapped |
+|---|---|---|---|---|
+| original | 320x200 | 64,000 | 119 fps | 341 fps |
+| HD | 1574x824 | 1,296,976 | 119 fps | 278 fps |
+
+20x the pixels for ~18% of frame time, so rasterisation is not the bottleneck at this scale. `numspans`
+went 774 -> 3538, comfortably inside the widened limit. One scene on one level; a crowded firefight
+will be heavier.
+
+**Verified**: original mode byte-identical to a pre-change build after *each* of 2a, 2c, 2d, 2e and 2f
+(fixed spawn, settled snapshot, three runs agreeing). HD checked by eye against the original — wider
+horizontally, wall band at the same vertical proportion (28% vs 29% of frame height). Both modes ran
+12s clean with no crash reports.
+
+**Look up/down was clamped to the original 200-row scale** (reported by the user). `MAXSCROLL` is a
+flat 60 *view rows* — 30% of a 200-row view, but under 7% of an HD one, so looking up and down barely
+moved. It is now `VIEWSCROLL(h) = h*60/200`, exactly 60 at 200 rows, and `SCROLLRATE` and the mouse-look
+delta scale the same way so the feel is unchanged. Two things this had to avoid breaking:
+
+- `player.scrollmin` doubles as a **vertical aim angle** — seven `(-player.scrollmin)&ANGLES` sites feed
+  autoaim and shot pitch. Left alone, a wider row range would have swung shots wildly. They now go
+  through `ScrollAngle()`, which normalises back to the 200-row scale. Measured identical at both
+  resolutions: full look-up gives aim 59 and full look-down 965 in original *and* HD.
+- `yslope[]` is indexed `[y + MAXSCROLL]` and sized `MAX_VIEW_HEIGHT + MAXSCROLL2`; both now track the
+  scaled range (`MAXSCROLL2` is `2*VIEWSCROLL(MAX_VIEW_HEIGHT)`).
+
+Verified: original mode byte-identical again afterwards; HD scrolls ±29.9% of the view against the
+original's ±29.5%, checked by forcing full up/level/down and looking at all three.
+
+**Long thin trapezoids fanning across the view** (reported by the user, on sloped ground).
+`RenderPolygon` walks the polygon edges with `rightstep=(deltax<<FRACBITS)/deltay`. Once the
+difference of projected x passes 32767 that shifts past `INT_MAX`, the step comes back wrapped
+negative, and the edge strides the wrong way laying trapezoids across the screen.
+
+Measured at the same spot: original mode's largest `|deltax|` is **10400** and never overflows; HD
+reaches **42835** and overflows 21 times in one frame. The HD projection scale is ~4x the original's
+160, which pushes near-plane-clipped vertices past a limit the 1995 fixed-point code was comfortably
+inside at 320x200. Fixed by bounding each projected x to 16000 either side of centre in
+`ZClipPolygon`, which caps every difference at 32000. The bound is an order of magnitude outside any
+real view, so edges crossing the visible columns are untouched; only edges already sweeping absurdly
+far off-screen are pinned, and those were producing garbage. Verified: overflow count is 0 on every
+map tested, original mode's numbers are unchanged, and original mode is still byte-identical.
+
+Also scaled, in the same pass: `ZClipPolygon`'s `vertexy > 640` reject. That constant is in the DOS
+original verbatim and is a screen-row bound on a magnitude (`clipty*SCALE/z`) that grows with the
+projection, so it starts discarding ordinary ceiling polygons at an HD scale — 940 per frame on map
+20, versus none in original mode. Now scaled with the projection and left at exactly 640 for every
+original view size. **This one is unproven against a visible symptom**: on the frames compared, the
+rejections made no difference to the image. It is fixed as a resolution assumption, not as a
+demonstrated repro.
+
+**Two more constants tuned for a projection scale of 160**, found while chasing reported texture
+warping:
+
+- `DrawWall`/`DrawSteps` cull a column with `if (scale<1000)`, where `scale` is the texel step and so
+  proportional to 1/projection. That culls anything nearer than 2.44 world units at 320x200 but
+  **10.1** at an HD scale — four times too eager, dropping columns off near walls. Now `viewminscale`,
+  which is exactly 1000 when the projection is 160.
+- `ISCALE` is `FRACUNIT/proj`, an integer division whose rounding error grows with the projection:
+  0.146% at 160, **0.450%** at 659. It is a texture step, so the error accumulates down a post. HD now
+  divides directly (`TEXELSTEP`), exact to 1/65536; original mode keeps the historical expression and
+  is byte-identical. Changes 4.2-9.2% of HD pixels.
+
+**The remaining `#ifdef VALIDATE` overflow guards are now compiled in** (`vertexlist` in R_render.c and
+R_conten.c, `entries` in R_render.c), matching what was done for the span guards. Measured peaks in HD
+are nowhere near their limits -- vertexlist 102/1536, entries 89/1024, spans 7638/262144, transparent
+posts 2361/32768 -- so none of these is a live problem, but an overflow will now name itself instead
+of corrupting the heap.
+
+### Still open: per-column angle quantisation (the zigzag)
+
+`pixelangle[x]` is an **integer** index into a TANANGLES-based table:
+`rint(atan((CENTERX-(x+1))/proj) * 2*TANANGLES/PI)`. The +/-0.5 rounding is fixed, but the angle step
+between adjacent columns shrinks as the projection grows:
+
+| | projection | angle units per column | rounding as a fraction of one column |
+|---|---|---|---|
+| original 320x200 | 160 | 32.6 | 1.5% |
+| HD 1574x824 | 659 | 7.9 | **6.3%** |
+
+So each HD column's ray is off by up to 6.3% of the spacing to its neighbour rather than 1.5% -- 4.1x
+worse, exactly the projection ratio. `pointz` jitters column to column, the wall top row jitters with
+it, and horizontal texture features zigzag. It is worst where depth changes fastest per column: near,
+oblique walls, which is where it was reported.
+
+Fixing it means finer angular resolution -- raising `TANANGLES` (tables are parameterised by it;
+`sines[TANANGLES*5]` and friends grow to ~1.2 MB at 4x) or making `pixelangle` fixed-point and
+interpolating `cosines[]` in the inner loop. Either changes original mode's output too, so the
+byte-identity check that has guarded every other change here would have to be given up or re-based.
+**Not attempted.**
+
+**The freeze on sloped ground** (reported by the user; reproduced under lldb). Scripted the reported
+route -- turn 180, walk down the slope on the first level, turn back -- with a watchdog `alarm()` per
+frame. It fired: **`RenderPolygon` entered 2 times, its outer loop ran 1,443,511,558 iterations.** A
+genuine infinite loop, in a `SlopeSpan` polygon, exactly where it was reported.
+
+`RenderPolygon` walks the polygon with `rightvertex` counting up and `leftvertex` counting down, both
+wrapping, and ends on `while (rightvertex!=leftvertex && mr_y!=scrollmax)`. The two walkers are only
+compared once per iteration, so they can pass each other without ever being equal on the same pass and
+then walk the polygon forever. Captured state at the freeze:
+
+```
+mr_y=867  stopy=470  scrollmin=0  scrollmax=880
+vertexy = [470, 867, -24264, 23649, 600]
+```
+
+Those vertices thousands of rows outside an 880-row view come from near-plane clipping at a 4x
+projection scale. At 320x200 the projected values stay small and the walk always converges, which is
+why the original never hit this.
+
+Two fixes, both in `RenderPolygon`:
+- The `skipleftvertex` path had no `leftvertex==rightvertex` guard while `skiprightvertex` did -- an
+  asymmetry present in the DOS original too (`source_dos/CODE/R_PLANE.C`). A run of vertices sharing a
+  y spins there forever. Mirrored the right-hand guard.
+- Bounded the trapezoid walk at `2*numvertex + (scrollmax-scrollmin) + 8`. Every legitimate iteration
+  either consumes a vertex or advances `mr_y` down the view, so that count is already unreachable; it
+  exists only so a malformed polygon cannot hang the game.
+
+Verified: the scripted repro now runs to completion (`z 183..222`, full 360 degree sweep at the bottom
+of the slope), and original mode is still byte-identical.
+
+**Noted, not fixed:** the brute-force position sweep used to find this also produced a segfault in
+`MapRow` with `span_p->picture == NULL` for an `sp_flat` span -- `mr_picture = lumpmain[flatlump+flatpic]`
+reads the lump cache directly and is NULL when that flat was never cached. It was only reachable by
+teleporting the player into map regions normal play does not enter, so it is likely a harness artifact
+rather than a live bug; it has not been reproduced from legitimate movement.
+
+**Known limits:**
+- The 320x200 chrome is stretched to the window, so at a wide aspect the weapon and status bar are
+  proportionally wider than the artwork intends.
+- `Display.c` writes index 0 to *erase* HUD elements (an indicator light going out). In HD those read
+  as transparent rather than black. Only reachable at HUD levels >= 1.
+- A live window resize keeps the HD resolution chosen for the old size until the next menu exit.
 
 ---
 

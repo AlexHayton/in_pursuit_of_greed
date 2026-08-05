@@ -52,7 +52,7 @@ void FN_RawPrint4(char *str)
  char ch;
 
  oldpx=printx;
- dest=viewylookup[printy]+printx;
+ dest=hudylookup[printy]+printx;
  height=font->height;
  while ((ch=*str++)!=0)
   {
@@ -60,7 +60,7 @@ void FN_RawPrint4(char *str)
    source=((byte*)font) + font->charofs[ch];
    while (width--)
     {
-     for (y=0,yh=0;y<height;y++,yh+=windowWidth)
+     for (y=0,yh=0;y<height;y++,yh+=hudWidth)
       {
        b=*source++;
        if (b) dest[yh]=fontbasecolor+b;
@@ -84,7 +84,7 @@ void FN_RawPrint2(char *str)
  char ch;
 
  oldpx=printx;
- dest=viewylookup[printy]+printx;
+ dest=hudylookup[printy]+printx;
  height=font->height;
  while ((ch=*str++)!=0)
   {
@@ -92,7 +92,7 @@ void FN_RawPrint2(char *str)
    source=((byte*)font) + font->charofs[ch];
    while (width--)
     {
-     for (y=0,yh=0;y<height;y++,yh+=windowWidth)
+     for (y=0,yh=0;y<height;y++,yh+=hudWidth)
       {
        b=*source++;
        if (b) dest[yh]=fontbasecolor+b;

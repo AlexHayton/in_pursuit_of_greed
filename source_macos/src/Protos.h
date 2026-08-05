@@ -521,6 +521,11 @@ typedef struct SoundCard_s
   int     vrhelmet;
   int     vrangle;
   int     vrdist;
+  /* macOS port additions.  These must stay at the end: LoadSetup accepts a
+     SETUP.CFG written by an older build by reading only the bytes that file
+     actually has, which only works while the older layout is a prefix. */
+  int     fullscreen;             /* window starts fullscreen */
+  int     hdmode;                 /* 0 = original 320x200, 1 = HD */
   } SoundCard;
 
 typedef struct
@@ -632,6 +637,7 @@ void       newplayer(int map,int chartype,int difficulty);
 void       SaveGame(int n);
 void       LoadGame(int n);
 void       ResetScalePostWidth (int NewWindowWidth);
+void       CheckMapFlats(void);
 void       addscore(int n);
 void       newmap(int map,int activate);
 void       respawnplayer(void);

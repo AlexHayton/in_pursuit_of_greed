@@ -26,8 +26,8 @@
 /**** VARIABLES ****/
 
 /*a scaled object is just encoded like a span                                                   */
-unsigned spantags[MAXSPANS];
-unsigned *starttaglist_p, *endtaglist_p;        // set by SortSpans
+spantag_t spantags[MAXSPANS];
+spantag_t *starttaglist_p, *endtaglist_p;       // set by SortSpans
 span_t   spans[MAXSPANS];
 int      spansx[MAXSPANS];
 int      spanx;
@@ -62,15 +62,15 @@ byte	 *mr_colormap;
   }
 
 
-void MedianOfThree(unsigned *data,unsigned count)
+void MedianOfThree(spantag_t *data,unsigned count)
 {
- unsigned temp;
+ spantag_t temp;
 
  if (count>=3)
   {
-   unsigned *beg=data;
-   unsigned *mid=data + (count/2);
-   unsigned *end=data + (count-1);
+   spantag_t *beg=data;
+   spantag_t *mid=data + (count/2);
+   spantag_t *end=data + (count-1);
    if (*beg>*mid)
     {
      if (*mid>*end)
@@ -89,12 +89,12 @@ void MedianOfThree(unsigned *data,unsigned count)
  }
 
 
-int Partition(unsigned *data,unsigned count)
+int Partition(spantag_t *data,unsigned count)
 {
- unsigned part=data[0];
- int      i=-1;
- int      j=count;
- unsigned temp;
+ spantag_t part=data[0];
+ int       i=-1;
+ int       j=count;
+ spantag_t temp;
 
  while (i<j)
   {
@@ -108,7 +108,7 @@ int Partition(unsigned *data,unsigned count)
  }
 
 
-void QuickSortHelper(unsigned *data,unsigned count)
+void QuickSortHelper(spantag_t *data,unsigned count)
 {
  int left=0;
  int part;
@@ -127,10 +127,10 @@ void QuickSortHelper(unsigned *data,unsigned count)
  }
 
 
-void InsertionSort(unsigned *data,unsigned count)
+void InsertionSort(spantag_t *data,unsigned count)
 {
- int      i, j;
- unsigned t;
+ int       i, j;
+ spantag_t t;
 
  for (i=1;i<(int)count;i++)
   {
@@ -155,7 +155,7 @@ void DrawDoorPost(void)
  fixed_t scale;
  int     light;
 
- scale=FIXEDMUL(pointz,ISCALE);
+ scale=TEXELSTEP(pointz);
  sp_source=span_p->picture;
 
  if (span_p->shadow==0)
@@ -188,7 +188,7 @@ void DrawDoorPost(void)
    sp_colormap=zcolormap[light];
    }
 
- sp_fracstep=FIXEDMUL(pointz,ISCALE);
+ sp_fracstep=TEXELSTEP(pointz);
  top=FIXEDDIV(span_p->y,scale);
  topy=top>>FRACBITS;
  fracadjust=top&(FRACUNIT-1);
@@ -198,7 +198,8 @@ void DrawDoorPost(void)
  if (topy<scrollmin)
   {
    sp_frac+=(scrollmin-topy)*scale;
-   while (sp_frac>sp_loopvalue) sp_frac-=sp_loopvalue;
+   if (sp_loopvalue>0)
+        while (sp_frac>sp_loopvalue) sp_frac-=sp_loopvalue;
    topy=scrollmin;
    }
  bottom=FIXEDDIV(span_p->yh,scale);
@@ -334,7 +335,7 @@ void DrawSprite(void)
  shapebottom=span_p->y;
  // project the x and height
  scale=FIXEDDIV(SCALE,pointz);
- fracstep=FIXEDMUL(pointz,ISCALE)<<sp->scale;
+ fracstep=TEXELSTEP(pointz)<<sp->scale;
  sp_fracstep=fracstep;
  leftx=span_p->x2;
  leftx-=pic->leftoffset<<bitshift;
@@ -399,7 +400,7 @@ void DrawSprite(void)
 void DrawSpans(void)
 /* Spans farther than MAXZ away should NOT have been entered into the list */
 {
- unsigned *spantag_p, tag;
+ spantag_t *spantag_p, tag;
  int      spannum;
  int      x2;
  fixed_t  lastz;                  // the pointz for which xystep is valid
@@ -438,8 +439,11 @@ void DrawSpans(void)
  while (spantag_p!=endtaglist_p)
   {
    tag=*spantag_p++;
-   pointz=tag>>ZTOFRAC;
-   spannum=tag&SPANMASK;
+   /* Mask before shifting.  The old 32-bit layout let the top bits of the
+      12-bit index fall into the low bits of the recovered depth; masking
+      keeps the index out of it entirely. */
+   pointz=(fixed_t)((tag&ZMASK)>>ZTOFRAC);
+   spannum=(int)(tag&SPANMASK);
    span_p=&spans[spannum];
    spanx=spansx[spannum];
    switch (span_p->spantype)
@@ -483,13 +487,13 @@ void DrawSpans(void)
 
       y1=span_p->y-scrollmin;
 
-      if ((unsigned)y1>=200) break;
+      if ((unsigned)y1>=(unsigned)windowHeight) break;
 
       mr_dest=viewylookup[y1]+spanx;
       mr_picture=span_p->picture;
       x2=span_p->x2;
 
-      if ((unsigned)x2>320) break;
+      if ((unsigned)x2>(unsigned)windowWidth) break;
 
       mr_count=x2-spanx;
       MapRow();
@@ -508,7 +512,7 @@ void DrawSpans(void)
 	  while (px<=w && mr_count>0)
 	   {
 	    x=backtangents[a>>FRACBITS];
-	    x2=center - x + windowWidth - 257;
+	    x2=center - x + 2*viewproj - 1;
 	    x2&=255;
 	    if (*mr_dest==255) *mr_dest=*(backdroplookup[h1]+x2);
 	    a-=afrac;
@@ -536,10 +540,10 @@ void DrawSpans(void)
       break;
      case sp_sky:
       py=span_p->y-scrollmin;
-      if ((unsigned)py>=200) break;
+      if ((unsigned)py>=(unsigned)windowHeight) break;
       px=spanx;
 
-      if ((unsigned)span_p->x2>320) break;
+      if ((unsigned)span_p->x2>(unsigned)windowWidth) break;
 
       mr_count=span_p->x2-spanx;
       mr_dest=viewylookup[py]+px;
@@ -551,7 +555,7 @@ void DrawSpans(void)
 	while (px<=w && mr_count>0)
 	 {
 	  x=backtangents[a>>FRACBITS];
-	  x2=center - x + windowWidth - 257;
+	  x2=center - x + 2*viewproj - 1;
 	  x2&=255;
 	  *mr_dest=*(backdroplookup[h1]+x2);
 	  a-=afrac;
@@ -613,8 +617,8 @@ void DrawSpans(void)
       x2=span_p->x2;
       y1=span_p->y-scrollmin;
 
-      if ((unsigned)y1>=200) break;
-      if ((unsigned)x2>320) break;
+      if ((unsigned)y1>=(unsigned)windowHeight) break;
+      if ((unsigned)x2>(unsigned)windowWidth) break;
 
       mr_dest=viewylookup[y1]+spanx;
       mr_picture=span_p->picture;
@@ -650,7 +654,7 @@ void DrawSpans(void)
 	  while (px<=w && mr_count>0)
 	   {
 	    x=backtangents[a>>FRACBITS];
-	    x2=center - x + windowWidth - 257;
+	    x2=center - x + 2*viewproj - 1;
 	    x2&=255;
 	    if (*mr_dest==255) *mr_dest=*(backdroplookup[h1]+x2);
 	    a-=afrac;

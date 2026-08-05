@@ -22,6 +22,7 @@
 extern SoundCard SC;
 
 SDL_Window *Sys_GetWindow(void);
+int         Sys_MapWindowToGame(float mx, float my, short *x, short *y);
 
 /* SDL scancode -> DOS set-1 scancode.  Anything not listed stays 0, which the
    engine treats as "no such key". */
@@ -268,32 +269,13 @@ void ResetMouse(void)
 }
 
 
-/* Menu code asks for positions in 320x200 screen coordinates.  Map the window
-   position back through the same 4:3 letterbox the renderer presents into.
-   Returns 0 for a point outside the letterbox. */
+/* Menu code asks for positions in 320x200 screen coordinates.  The letterbox
+   geometry lives in sys_video.c next to the code that presents into it -- this
+   file used to carry a second copy, complete with its own 4:3 and 320x200
+   literals, which is one edit away from clicks landing off what they hit. */
 static int map_to_screen(float mx, float my, short *x, short *y)
 {
-    int   winw, winh;
-    float scale, boxw, boxh, boxx, boxy;
-
-    SDL_GetWindowSize(Sys_GetWindow(), &winw, &winh);
-
-    scale = (float)winw / 4.0f;
-    if ((float)winh / 3.0f < scale)
-        scale = (float)winh / 3.0f;
-
-    boxw = 4.0f * scale;
-    boxh = 3.0f * scale;
-    boxx = ((float)winw - boxw) * 0.5f;
-    boxy = ((float)winh - boxh) * 0.5f;
-
-    if (mx < boxx || mx >= boxx + boxw || my < boxy || my >= boxy + boxh)
-        return 0;
-
-    if (x) *x = (short)((mx - boxx) / boxw * 320.0f);
-    if (y) *y = (short)((my - boxy) / boxh * 200.0f);
-
-    return 1;
+    return Sys_MapWindowToGame(mx, my, x, y);
 }
 
 

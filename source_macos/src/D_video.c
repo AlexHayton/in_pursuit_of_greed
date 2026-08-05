@@ -213,9 +213,9 @@ void VI_DrawTransPicToBuffer(int x,int y,pic_t *pic)
    }
  while (height-->0)
   {
-   if (y<200)
+   if (y<hudHeight)
     {
-     dest=viewylookup[y]+x;
+     dest=hudylookup[y]+x;
      width=pic->width;
      while (width--)
       {
@@ -270,11 +270,11 @@ void VI_DrawMaskedPicToBuffer2(int x,int y,pic_t *pic)
     else if (maplight>MAXZLIGHT) colormap=zcolormap[MAXZLIGHT];
     else colormap=zcolormap[maplight];
    }
- if (height+y>windowHeight)
-  height=windowHeight-y;
+ if (height+y>hudHeight)
+  height=hudHeight-y;
  while (height-->0)
   {
-   dest=viewylookup[y]+x;
+   dest=hudylookup[y]+x;
    width=pic->width;
    while (width--)
     {
@@ -290,12 +290,40 @@ void VI_DrawMaskedPicToBuffer2(int x,int y,pic_t *pic)
 void RF_BlitView(void)
 /* Copy the rendered 3D view into the framebuffer.  Row i to row i -- the DOS
    version is a straight linear copy (RA_DRAW.ASM); the Win32 C rewrite's
-   i/199-i reversal was a GDI bottom-up workaround, see the note above. */
+   i/199-i reversal was a GDI bottom-up workaround, see the note above.
+
+   This used to copy a fixed SCREENHEIGHT rows of SCREENWIDTH and ignore the
+   view size entirely.  At any view smaller than full screen that is wrong in
+   both directions: viewylookup rows are windowWidth apart, not 320, and rows
+   past windowHeight still hold pointers from the previous SetViewSize.  The
+   DOS original (RA_DRAW.ASM) takes the fast path only when the view is full
+   width and otherwise steps row by row into windowTop/windowLeft, which is
+   what this now does.
+
+   In HD nothing is copied: the view buffer is presented directly as its own
+   texture and `screen` carries only the 2D overlay. */
 {
 	int i;
 
-	for ( i = 0 ; i < SCREENHEIGHT ; i++ )
-		memcpy(ylookup[i],viewylookup[i],SCREENWIDTH);
+	if (hdmode)
+	{
+		/* Nothing to copy: the view buffer goes to the screen as its own
+		   texture and `screen` carries only the 2D chrome.  Just record that a
+		   frame is ready, so VI_BlitView can tell the play loop from a menu or
+		   a fade presenting `screen` directly. */
+		hdviewfresh = 1;
+		return;
+	}
+
+	if (windowWidth==SCREENWIDTH && windowHeight==SCREENHEIGHT)
+	{
+		for ( i = 0 ; i < SCREENHEIGHT ; i++ )
+			memcpy(ylookup[i],viewylookup[i],SCREENWIDTH);
+		return;
+	}
+
+	for ( i = 0 ; i < windowHeight ; i++ )
+		memcpy(ylookup[windowTop+i]+windowLeft,viewylookup[i],windowWidth);
 }
 
 
@@ -315,16 +343,20 @@ void VI_DrawMaskedPicToBuffer(int x,int y,pic_t *pic)
 		source += pic->width;
 		height--;
 	}
-	while (height--) 
+	while (height--)
 	{
-		if (y<200) 
+		if (y<hudHeight)
 		{
-			dest = viewbuffer + (y * MAX_VIEW_WIDTH + x);     
+			/* Through hudylookup, not viewbuffer + y*MAX_VIEW_WIDTH as this
+			   once was: that constant is the size the scratch array is declared
+			   at, not the pitch of the rows being filled, and this artwork does
+			   not live in the view buffer at all in HD. */
+			dest = hudylookup[y] + x;
 			xcor = x;
 			width = pic->width;
-			while (width--) 
+			while (width--)
 			{
-				if ( ( xcor >= 0 ) && ( xcor <= 319 ) ) 
+				if ( ( xcor >= 0 ) && ( xcor < hudWidth ) )
 				{
 					if (*source) 
 						*dest = *source;

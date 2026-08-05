@@ -58,6 +58,10 @@ void VI_DrawMaskedPicToBuffer2(int x,int y,pic_t *pic);
 void VI_DrawTransPicToBuffer(int x,int y,pic_t *pic);
 void VI_BlitView();
 void VI_ResetPalette();
+/* Implemented by the platform layer (platform/sys_video.c). */
+void VI_SetFullscreen(int on);
+int  VI_GetFullscreen(void);
+void VI_ApplyRenderMode(void);
 
 #endif
 

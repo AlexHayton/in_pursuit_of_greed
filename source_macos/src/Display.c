@@ -345,25 +345,25 @@ void displaystats1(int ofs)
   {
    c=(d*(i-(152+ofs)))/8 + 140;
    for(j=272;j<=300;j++)
-    if (*(viewylookup[i]+j)==254) *(viewylookup[i]+j)=c;
+    if (*(hudylookup[i]+j)==254) *(hudylookup[i]+j)=c;
    }
  for(i=193+ofs;i<=199+ofs;i++)
   {
    c=(d*((199+ofs)-i))/7 + 140;
    for(j=272;j<=300;j++)
-    if (*(viewylookup[i]+j)==254) *(viewylookup[i]+j)=c;
+    if (*(hudylookup[i]+j)==254) *(hudylookup[i]+j)=c;
    }
  for(j=307;j<=315;j++)
   {
    c=(d*(315-j))/9 + 140;
    for(i=165+ofs;i<=187+ofs;i++)
-    if (*(viewylookup[i]+j)==254) *(viewylookup[i]+j)=c;
+    if (*(hudylookup[i]+j)==254) *(hudylookup[i]+j)=c;
    }
  for(j=257;j<=265;j++)
   {
    c=(d*(j-257))/9 + 140;
    for(i=165+ofs;i<=187+ofs;i++)
-    if (*(viewylookup[i]+j)==254) *(viewylookup[i]+j)=c;
+    if (*(hudylookup[i]+j)==254) *(hudylookup[i]+j)=c;
    }
  d=(player.angst*10)/player.maxangst;
  if (d>=10) d=9;
@@ -379,7 +379,7 @@ void displaystats1(int ofs)
      if (c<120) c=113;
      }
    for(i=161+ofs;i<=185+ofs;i++)
-    if (*(viewylookup[i]+j)==254) *(viewylookup[i]+j)=c;
+    if (*(hudylookup[i]+j)==254) *(hudylookup[i]+j)=c;
    }
  font=font2;
  fontbasecolor=0;
@@ -402,7 +402,7 @@ void displaycompass1(int ofs)
  c=139;
  for(i=0;i<10;i++,c--)
   {
-   *(viewylookup[y]+x)=c;
+   *(hudylookup[y]+x)=c;
    x1+=costable[player.angle];
    y1-=FIXEDMUL(sintable[player.angle],54394);
    x=x1>>FRACBITS;
@@ -413,12 +413,12 @@ void displaycompass1(int ofs)
 
 void displaysettings1(int ofs)
 {
- if (heatmode) memset(viewylookup[199+ofs]+236,102,6);
-  else memset(viewylookup[199+ofs]+236,0,6);
- if (motionmode) memset(viewylookup[199+ofs]+246,156,6);
-  else memset(viewylookup[199+ofs]+246,0,6);
- if (mapmode) memset(viewylookup[199+ofs]+226,133,6);
-  else memset(viewylookup[199+ofs]+226,0,6);
+ if (heatmode) memset(hudylookup[199+ofs]+236,102,6);
+  else memset(hudylookup[199+ofs]+236,0,6);
+ if (motionmode) memset(hudylookup[199+ofs]+246,156,6);
+  else memset(hudylookup[199+ofs]+246,0,6);
+ if (mapmode) memset(hudylookup[199+ofs]+226,133,6);
+  else memset(hudylookup[199+ofs]+226,0,6);
  }
 
 
@@ -479,7 +479,7 @@ void displayinventory1(int ofs)
       y=(188+ofs)-top-count;
       for (j=0;j<count;j++,collumn++,y++)
        if (*collumn)
-        *(viewylookup[y]+x)=*collumn;
+        *(hudylookup[y]+x)=*collumn;
       }
    }
  else
@@ -541,7 +541,7 @@ void displaynetbonusitem1(int ofs)
       y=(188+ofs)-top-count;
        for (j=0;j<count;j++,collumn++,y++)
 	if (*collumn)
-	 *(viewylookup[y]+x)=*collumn;
+	 *(hudylookup[y]+x)=*collumn;
       }
    }
  else
@@ -554,7 +554,7 @@ void displaynetbonusitem1(int ofs)
    b=&(p->data);
    for (y=0;y<30;y++)
     for (x=0;x<30;x++,b++)
-     *(viewylookup[y+158+ofs]+19+x)=*b;
+     *(hudylookup[y+158+ofs]+19+x)=*b;
    }
  printx=53;
  printy=172+ofs;
@@ -634,7 +634,7 @@ void displaybonusitem1(int ofs)
     y=(188+ofs)-top-count;
     for (j=0;j<count;j++,collumn++,y++)
      if (*collumn)
-      *(viewylookup[y]+x)=*collumn;
+      *(hudylookup[y]+x)=*collumn;
     }
 
  printx=53;
@@ -1201,13 +1201,13 @@ void displayinventoryitem(void)
  if (inventorycursor<0) return;
  for(i=0;i<27;i++)
   {
-   memset(viewylookup[i]+windowWidth-54,0,54);
-   *(viewylookup[i]+windowWidth-55)=30;
+   memset(hudylookup[i]+hudWidth-54,0,54);
+   *(hudylookup[i]+hudWidth-55)=30;
    }
- memset(viewylookup[i]+windowWidth-55,30,55);
+ memset(hudylookup[i]+hudWidth-55,30,55);
  lump=inventorylump + inventorycursor;
  pic=lumpmain[lump]; // draw the pic for it
- x=windowWidth-31;
+ x=hudWidth-31;
  for (i=0;i<pic->width;i++,x++)
   if (pic->collumnofs[i])
    {
@@ -1219,11 +1219,11 @@ void displayinventoryitem(void)
     y=28-top-count;
     for (j=0;j<count;j++,collumn++,y++)
      if (*collumn)
-      *(viewylookup[y]+x)=*collumn;
+      *(hudylookup[y]+x)=*collumn;
     }
  fontbasecolor=0;
  font=font3;         // number of items
- printx=windowWidth-53;
+ printx=hudWidth-53;
  printy=6;
  sprintf(str1,"%2i",player.inventory[inventorycursor]);
  FN_RawPrint4(str1);
@@ -1281,41 +1281,41 @@ void displayarrow(int x,int y)
 {
  int angle;
 
- *(viewylookup[y]+x)=26;
+ *(hudylookup[y]+x)=26;
  angle=(((player.angle+DEGREE45_2)&ANGLES)*8)/ANGLES;
  switch (angle)
   {
    case 0:
-    *(viewylookup[y]+x+1)=40;
-    *(viewylookup[y]+x-1)=20;
+    *(hudylookup[y]+x+1)=40;
+    *(hudylookup[y]+x-1)=20;
     break;
    case 1:
-    *(viewylookup[y-1]+x+1)=40;
-    *(viewylookup[y+1]+x-1)=20;
+    *(hudylookup[y-1]+x+1)=40;
+    *(hudylookup[y+1]+x-1)=20;
     break;
    case 2:
-    *(viewylookup[y-1]+x)=40;
-    *(viewylookup[y+1]+x)=20;
+    *(hudylookup[y-1]+x)=40;
+    *(hudylookup[y+1]+x)=20;
     break;
    case 3:
-    *(viewylookup[y-1]+x-1)=40;
-    *(viewylookup[y+1]+x+1)=20;
+    *(hudylookup[y-1]+x-1)=40;
+    *(hudylookup[y+1]+x+1)=20;
     break;
    case 4:
-    *(viewylookup[y]+x-1)=40;
-    *(viewylookup[y]+x+1)=20;
+    *(hudylookup[y]+x-1)=40;
+    *(hudylookup[y]+x+1)=20;
     break;
    case 5:
-    *(viewylookup[y+1]+x-1)=40;
-    *(viewylookup[y-1]+x+1)=20;
+    *(hudylookup[y+1]+x-1)=40;
+    *(hudylookup[y-1]+x+1)=20;
     break;
    case 6:
-    *(viewylookup[y+1]+x)=40;
-    *(viewylookup[y-1]+x)=20;
+    *(hudylookup[y+1]+x)=40;
+    *(hudylookup[y-1]+x)=20;
     break;
    case 7:
-    *(viewylookup[y+1]+x+1)=40;
-    *(viewylookup[y-1]+x-1)=20;
+    *(hudylookup[y+1]+x+1)=40;
+    *(hudylookup[y-1]+x-1)=20;
     break;
    }
  }
@@ -1328,10 +1328,10 @@ void displaymapmode(void)
  int mapspot;
  int b;
 
- y=windowHeight/4;
+ y=hudHeight/4;
  miny=-(y/2);
  maxy=y/2;
- x=windowWidth/4;
+ x=hudWidth/4;
  minx=-(x/2);
  maxx=x/2;
  ofsx=1-((player.x>>(FRACBITS+4))&3);
@@ -1353,12 +1353,12 @@ void displaymapmode(void)
       if (c==DOOR_COLOR)
        {
 	for(a=0;a<5;a++,x++)
-	 if (x>=0 && x<windowWidth && y+2<windowHeight && y+2>=0) *(viewylookup[y+2]+x)=c;
+	 if (x>=0 && x<hudWidth && y+2<hudHeight && y+2>=0) *(hudylookup[y+2]+x)=c;
 	}
       else
        {
 	for(a=0;a<5;a++,x++)
-	 if (x>=0 && x<windowWidth && y<windowHeight && y>=0) *(viewylookup[y]+x)=c;
+	 if (x>=0 && x<hudWidth && y<hudHeight && y>=0) *(hudylookup[y]+x)=c;
 	}
       x--;
       }
@@ -1379,38 +1379,38 @@ void displaymapmode(void)
       if (c==DOOR_COLOR)
        {
 	for(a=0;a<5;a++,y++)
-	 if (y>=0 && y<windowHeight && x+2<windowWidth && x+2>=0) *(viewylookup[y]+x+2)=c;
+	 if (y>=0 && y<hudHeight && x+2<hudWidth && x+2>=0) *(hudylookup[y]+x+2)=c;
 	}
       else
        {
 	for(a=0;a<5;a++,y++)
-	 if (y>=0 && y<windowHeight && x<windowWidth && x>=0) *(viewylookup[y]+x)=c;
+	 if (y>=0 && y<hudHeight && x<hudWidth && x>=0) *(hudylookup[y]+x)=c;
 	}
       y--;
       }
    else y+=4;
    }
- displayarrow(windowWidth/2+1,windowHeight/2+1);
+ displayarrow(hudWidth/2+1,hudHeight/2+1);
  if (BonusItem.score)
   {
    y=ofsy + 4*(BonusItem.tiley - py);
-   y+=windowHeight/2;
+   y+=hudHeight/2;
    x=ofsx + 4*(BonusItem.tilex - px);
-   x+=windowWidth/2;
+   x+=hudWidth/2;
    c=44;
    for(a=0;a<4;a++)
     for(b=0;b<4;b++)
-     if (x+b<windowWidth && x+b>=0 && y+a<windowHeight && y+a>=0) *(viewylookup[y+a]+b+x)=c;
+     if (x+b<hudWidth && x+b>=0 && y+a<hudHeight && y+a>=0) *(hudylookup[y+a]+b+x)=c;
    }
  if (exitexists)
   {
    y=ofsy + 4*(exity - py);
-   y+=windowHeight/2;
+   y+=hudHeight/2;
    x=ofsx + 4*(exitx - px);
-   x+=windowWidth/2;
+   x+=hudWidth/2;
    for(a=0;a<4;a++)
     for(b=0;b<4;b++)
-     if (x+b<windowWidth && x+b>=0 && y+a<windowHeight && y+a>=0) *(viewylookup[y+a]+b+x)=187;
+     if (x+b<hudWidth && x+b>=0 && y+a<hudHeight && y+a>=0) *(hudylookup[y+a]+b+x)=187;
    }
  }
 
@@ -1445,8 +1445,8 @@ void displayswingmapmode(void)
  yfracstep=sines[((player.angle+SOUTH)&ANGLES)<<FINESHIFT];
  xfracstep2=cosines[player.angle<<FINESHIFT];
  yfracstep2=sines[player.angle<<FINESHIFT];
- xfrac2=((windowWidth/2)<<FRACBITS) - (py*xfracstep2 + px*xfracstep);
- yfrac2=((windowHeight/2)<<FRACBITS) - (py*yfracstep2 + px*yfracstep);
+ xfrac2=((hudWidth/2)<<FRACBITS) - (py*xfracstep2 + px*xfracstep);
+ yfrac2=((hudHeight/2)<<FRACBITS) - (py*yfracstep2 + px*yfracstep);
  y=yfrac2>>FRACBITS;
  x=xfrac2>>FRACBITS;
  mapspot=0;
@@ -1464,15 +1464,15 @@ void displayswingmapmode(void)
    x1=(xfrac>>FRACBITS);
    y1=(yfrac>>FRACBITS);
 
-   if (y1>=0 && x1>=0 && x1<windowWidth && y1<windowHeight) *(viewylookup[y1]+x1)=44;
-   if (y1+1>=0 && x1>=0 && x1<windowWidth && y1+1<windowHeight) *(viewylookup[y1+1]+x1)=44;
+   if (y1>=0 && x1>=0 && x1<hudWidth && y1<hudHeight) *(hudylookup[y1]+x1)=44;
+   if (y1+1>=0 && x1>=0 && x1<hudWidth && y1+1<hudHeight) *(hudylookup[y1+1]+x1)=44;
    x1++;
-   if (y1>=0 && x1>=0 && x1<windowWidth && y1<windowHeight) *(viewylookup[y1]+x1)=44;
+   if (y1>=0 && x1>=0 && x1<hudWidth && y1<hudHeight) *(hudylookup[y1]+x1)=44;
    y1++;
-   if (y1>=0 && x1>=0 && x1<windowWidth && y1<windowHeight) *(viewylookup[y1]+x1)=44;
+   if (y1>=0 && x1>=0 && x1<hudWidth && y1<hudHeight) *(hudylookup[y1]+x1)=44;
 
-   xfrac2=((windowWidth/2)<<FRACBITS) - (py*xfracstep2 + px*xfracstep);
-   yfrac2=((windowHeight/2)<<FRACBITS) - (py*yfracstep2 + px*yfracstep);
+   xfrac2=((hudWidth/2)<<FRACBITS) - (py*xfracstep2 + px*xfracstep);
+   yfrac2=((hudHeight/2)<<FRACBITS) - (py*yfracstep2 + px*yfracstep);
    y=yfrac2>>FRACBITS;
    x=xfrac2>>FRACBITS;
    }
@@ -1487,15 +1487,15 @@ void displayswingmapmode(void)
    x1=(xfrac>>FRACBITS);
    y1=(yfrac>>FRACBITS);
 
-   if (y1>=0 && x1>=0 && x1<windowWidth && y1<windowHeight) *(viewylookup[y1]+x1)=187;
-   if (y1+1>=0 && x1>=0 && x1<windowWidth && y1+1<windowHeight) *(viewylookup[y1+1]+x1)=187;
+   if (y1>=0 && x1>=0 && x1<hudWidth && y1<hudHeight) *(hudylookup[y1]+x1)=187;
+   if (y1+1>=0 && x1>=0 && x1<hudWidth && y1+1<hudHeight) *(hudylookup[y1+1]+x1)=187;
    x1++;
-   if (y1>=0 && x1>=0 && x1<windowWidth && y1<windowHeight) *(viewylookup[y1]+x1)=187;
+   if (y1>=0 && x1>=0 && x1<hudWidth && y1<hudHeight) *(hudylookup[y1]+x1)=187;
    y1++;
-   if (y1>=0 && x1>=0 && x1<windowWidth && y1<windowHeight) *(viewylookup[y1]+x1)=187;
+   if (y1>=0 && x1>=0 && x1<hudWidth && y1<hudHeight) *(hudylookup[y1]+x1)=187;
 
-   xfrac2=((windowWidth/2)<<FRACBITS) - (py*xfracstep2 + px*xfracstep);
-   yfrac2=((windowHeight/2)<<FRACBITS) - (py*yfracstep2 + px*yfracstep);
+   xfrac2=((hudWidth/2)<<FRACBITS) - (py*xfracstep2 + px*xfracstep);
+   yfrac2=((hudHeight/2)<<FRACBITS) - (py*yfracstep2 + px*yfracstep);
    y=yfrac2>>FRACBITS;
    x=xfrac2>>FRACBITS;
    }
@@ -1516,7 +1516,7 @@ void displayswingmapmode(void)
 	 {
 	  y2=y1+(((MapZoom>>1)*yfracstep2)>>FRACBITS);
 	  x2=x1+(((MapZoom>>1)*xfracstep2)>>FRACBITS);
-	  if (y2>=0 && x2>=0 && x2<windowWidth && y2<windowHeight) *(viewylookup[y2]+x2)=c;
+	  if (y2>=0 && x2>=0 && x2<hudWidth && y2<hudHeight) *(hudylookup[y2]+x2)=c;
 	  xfrac+=xfracstep;
 	  x1=xfrac>>FRACBITS;
 	  yfrac+=yfracstep;
@@ -1527,7 +1527,7 @@ void displayswingmapmode(void)
        {
 	for(a=0;a<=MapZoom;a++)
 	 {
-	  if (y1>=0 && x1>=0 && x1<windowWidth && y1<windowHeight) *(viewylookup[y1]+x1)=c;
+	  if (y1>=0 && x1>=0 && x1<hudWidth && y1<hudHeight) *(hudylookup[y1]+x1)=c;
 	  xfrac+=xfracstep;
 	  x1=xfrac>>FRACBITS;
 	  yfrac+=yfracstep;
@@ -1551,8 +1551,8 @@ void displayswingmapmode(void)
    xfrac2+=xfracstep2*MapZoom;
    x=xfrac2>>FRACBITS;
    }
- xfrac=((windowWidth/2)<<FRACBITS) - (py*xfracstep2 + px*xfracstep);
- yfrac=((windowHeight/2)<<FRACBITS) - (py*yfracstep2 + px*yfracstep);
+ xfrac=((hudWidth/2)<<FRACBITS) - (py*xfracstep2 + px*xfracstep);
+ yfrac=((hudHeight/2)<<FRACBITS) - (py*yfracstep2 + px*yfracstep);
  y=yfrac>>FRACBITS;
  x=xfrac>>FRACBITS;
  for(i=0;i<MAPCOLS;i++)
@@ -1572,7 +1572,7 @@ void displayswingmapmode(void)
 	 {
 	  y2=y1+(((MapZoom>>1)*yfracstep)>>FRACBITS);
 	  x2=x1+(((MapZoom>>1)*xfracstep)>>FRACBITS);
-	  if (y2>=0 && x2>=0 && x2<windowWidth && y2<windowHeight) *(viewylookup[y2]+x2)=c;
+	  if (y2>=0 && x2>=0 && x2<hudWidth && y2<hudHeight) *(hudylookup[y2]+x2)=c;
 	  xfrac2+=xfracstep2;
 	  x1=xfrac2>>FRACBITS;
 	  yfrac2+=yfracstep2;
@@ -1583,7 +1583,7 @@ void displayswingmapmode(void)
        {
 	for(a=0;a<=MapZoom;a++)
 	 {
-	  if (y1>=0 && x1>=0 && x1<windowWidth && y1<windowHeight) *(viewylookup[y1]+x1)=c;
+	  if (y1>=0 && x1>=0 && x1<hudWidth && y1<hudHeight) *(hudylookup[y1]+x1)=c;
 	  xfrac2+=xfracstep2;
 	  x1=xfrac2>>FRACBITS;
 	  yfrac2+=yfracstep2;
@@ -1607,7 +1607,7 @@ void displayswingmapmode(void)
    xfrac+=xfracstep*MapZoom;
    x=xfrac>>FRACBITS;
    }
- *(viewylookup[windowHeight/2+1]+windowWidth/2+1)=40;
+ *(hudylookup[hudHeight/2+1]+hudWidth/2+1)=40;
  }
 
 
@@ -1623,20 +1623,20 @@ void displayheatmode(void)
      c=-reallight[i*64+j]/48;
      if (c>15) c=15;
       else if (c<0) c=0;
-     *(viewylookup[i+21]+j+3)=88-c;
+     *(hudylookup[i+21]+j+3)=88-c;
      }
- memset(viewylookup[20]+2,73,66);
- memset(viewylookup[85]+2,73,66);
+ memset(hudylookup[20]+2,73,66);
+ memset(hudylookup[85]+2,73,66);
  for(i=21;i<85;i++)
   {
-   *(viewylookup[i]+2)=73;
-   *(viewylookup[i]+67)=73;
+   *(hudylookup[i]+2)=73;
+   *(hudylookup[i]+67)=73;
    }
- *(viewylookup[(player.y>>FRACTILESHIFT)+21]+(player.x>>FRACTILESHIFT)+3)=40;
+ *(hudylookup[(player.y>>FRACTILESHIFT)+21]+(player.x>>FRACTILESHIFT)+3)=40;
  if (BonusItem.score)
-  *(viewylookup[BonusItem.tiley + 21] + BonusItem.tilex + 3)=44;
+  *(hudylookup[BonusItem.tiley + 21] + BonusItem.tilex + 3)=44;
  if (exitexists)
-  *(viewylookup[exity + 21] + exitx + 3)=187;
+  *(hudylookup[exity + 21] + exitx + 3)=187;
  }
 
 
@@ -1646,10 +1646,10 @@ void displayheatmapmode(void)
  int i, j, ofsx, ofsy, x, y, px, py, mapy, mapx, c, a, miny, maxy, minx, maxx;
  int mapspot, b;
 
- y=windowHeight/4;
+ y=hudHeight/4;
  miny=-(y/2);
  maxy=y/2;
- x=windowWidth/4;
+ x=hudWidth/4;
  minx=-(x/2);
  maxx=x/2;
  ofsx=1-((player.x>>(FRACBITS+4))&3);
@@ -1672,9 +1672,9 @@ void displayheatmapmode(void)
        else if (c<0) c=0;
       c=88-c;
       for(a=0;a<4;a++)
-       if (y+a<windowHeight && y+a>=0)
+       if (y+a<hudHeight && y+a>=0)
 	for(b=0;b<4;b++)
-	 if (x+b<windowWidth && x+b>=0) *(viewylookup[y+a]+b+x)=c;
+	 if (x+b<hudWidth && x+b>=0) *(hudylookup[y+a]+b+x)=c;
       }
     }
  }
@@ -1691,20 +1691,20 @@ void displaymotionmode(void)
    {
     sx=sp->x>>FRACTILESHIFT;
     sy=sp->y>>FRACTILESHIFT;
-    *(viewylookup[sy+21]+sx+3)=152;
+    *(hudylookup[sy+21]+sx+3)=152;
     }
- memset(viewylookup[20]+2,73,66);
- memset(viewylookup[85]+2,73,66);
+ memset(hudylookup[20]+2,73,66);
+ memset(hudylookup[85]+2,73,66);
  for(i=21;i<85;i++)
   {
-   *(viewylookup[i]+2)=73;
-   *(viewylookup[i]+67)=73;
+   *(hudylookup[i]+2)=73;
+   *(hudylookup[i]+67)=73;
    }
- *(viewylookup[(player.y>>FRACTILESHIFT)+21]+(player.x>>FRACTILESHIFT)+3)=40;
+ *(hudylookup[(player.y>>FRACTILESHIFT)+21]+(player.x>>FRACTILESHIFT)+3)=40;
  if (BonusItem.score)
-  *(viewylookup[BonusItem.tiley + 21] + BonusItem.tilex + 3)=44;
+  *(hudylookup[BonusItem.tiley + 21] + BonusItem.tilex + 3)=44;
  if (exitexists)
-  *(viewylookup[exity + 21] + exitx + 3)=187;
+  *(hudylookup[exity + 21] + exitx + 3)=187;
  }
 
 
@@ -1714,8 +1714,8 @@ void displaymotionmapmode(void)
  int        ofsx, ofsy, x, y, a, b, px, py;
  scaleobj_t *sp;
 
- ofsx=1-((player.x>>(FRACBITS+4))&3)+windowWidth/2;
- ofsy=1-((player.y>>(FRACBITS+4))&3)+windowHeight/2;
+ ofsx=1-((player.x>>(FRACBITS+4))&3)+hudWidth/2;
+ ofsy=1-((player.y>>(FRACBITS+4))&3)+hudHeight/2;
  px=player.x>>FRACTILESHIFT;
  py=player.y>>FRACTILESHIFT;
  for(sp=firstscaleobj.next;sp!=&lastscaleobj;sp=sp->next)
@@ -1724,9 +1724,9 @@ void displaymotionmapmode(void)
     x=((((sp->x)>>FRACTILESHIFT)-px)<<2)+ofsx;
     y=((((sp->y)>>FRACTILESHIFT)-py)<<2)+ofsy;
     for(a=0;a<4;a++)
-     if (y+a<windowHeight && y+a>=0)
+     if (y+a<hudHeight && y+a>=0)
       for(b=0;b<4;b++)
-       if (x+b<windowWidth && x+b>=0) *(viewylookup[y+a]+b+x)=152;
+       if (x+b<hudWidth && x+b>=0) *(hudylookup[y+a]+b+x)=152;
     }
  }
 

@@ -158,6 +158,28 @@ void CheckElevators(void)
  }
 
 
+int ViewScrollRate(void)
+/* SCROLLRATE is a number of view rows per tick.  Scaled with the view so that
+   looking up and down covers the same ground per keypress at any render
+   resolution; exactly SCROLLRATE at the original 200 rows. */
+{
+ int r;
+
+ r=(SCROLLRATE*windowHeight)/INIT_VIEW_HEIGHT;
+ return r<1 ? 1 : r;
+ }
+
+
+int ScrollAngle(void)
+/* player.scrollmin is a view-row offset, but the aiming code reads it directly
+   as an angle -- so the row range has to be normalised back to the 200-row
+   scale it was written against, or vertical autoaim and shot pitch would change
+   with the render resolution.  Identity at 200 rows. */
+{
+ return (((-player.scrollmin)*INIT_VIEW_HEIGHT)/windowHeight)&ANGLES;
+ }
+
+
 int GetTargetAngle(int n, fixed_t pz)
 {
  scaleobj_t *hsprite;
@@ -166,7 +188,7 @@ int GetTargetAngle(int n, fixed_t pz)
  fixed_t    sz;
 
  if (!autotarget)
-  return (-player.scrollmin)&ANGLES;
+  return ScrollAngle();
  accuracy=16; //16 + 2*player.difficulty;
  counter=0;
  found=false;
@@ -322,26 +344,26 @@ int GetTargetAngle(int n, fixed_t pz)
    if (sz>pz)
     {
      z=(sz-pz)>>(FRACBITS+2);
-     if (z>=MAXAUTO) return (-player.scrollmin)&ANGLES;
+     if (z>=MAXAUTO) return ScrollAngle();
      x=(hsprite->x-player.x)>>(FRACBITS+2);
      y=(hsprite->y-player.y)>>(FRACBITS+2);
      d=(int)sqrt(x*x + y*y);
-     if (d>=MAXAUTO || autoangle2[d][z]==-1) return (-player.scrollmin)&ANGLES;
+     if (d>=MAXAUTO || autoangle2[d][z]==-1) return ScrollAngle();
      return autoangle2[d][z];
      }
    else if (sz<pz)
     {
      z=(pz-sz)>>(FRACBITS+2);
-     if (z>=MAXAUTO) return (-player.scrollmin)&ANGLES;
+     if (z>=MAXAUTO) return ScrollAngle();
      x=(hsprite->x-player.x)>>(FRACBITS+2);
      y=(hsprite->y-player.y)>>(FRACBITS+2);
      d=(int)sqrt(x*x + y*y);
-     if (d>=MAXAUTO || autoangle2[d][z]==-1) return (-player.scrollmin)&ANGLES;
+     if (d>=MAXAUTO || autoangle2[d][z]==-1) return ScrollAngle();
      return -autoangle2[d][z];
      }
-   else return (-player.scrollmin)&ANGLES;
+   else return ScrollAngle();
    }
- else return (-player.scrollmin)&ANGLES;
+ else return ScrollAngle();
  }
 
 
@@ -1663,21 +1685,23 @@ void ControlMovement (void)
    keyboardDelay=timecount+KBDELAY;
    }
 
- if (in_button[bt_lookup] && !netmsgstatus) scrollview-=SCROLLRATE;
- if (in_button[bt_lookdown] && !netmsgstatus) scrollview+=SCROLLRATE;
+ /* SCROLLRATE is in view rows, so it has to scale with the view or looking up
+    and down crawls at an HD height.  ViewScrollRate is SCROLLRATE at 200. */
+ if (in_button[bt_lookup] && !netmsgstatus) scrollview-=ViewScrollRate();
+ if (in_button[bt_lookdown] && !netmsgstatus) scrollview+=ViewScrollRate();
  if (in_button[bt_centerview] && !netmsgstatus) scrollview=255;
 
  if (scrollview==255)
   {
    if (player.scrollmin<0)
     {
-     player.scrollmin+=SCROLLRATE;
-     player.scrollmax+=SCROLLRATE;
+     player.scrollmin+=ViewScrollRate();
+     player.scrollmax+=ViewScrollRate();
      }
    else if (player.scrollmin>0)
     {
-     player.scrollmin-=SCROLLRATE;
-     player.scrollmax-=SCROLLRATE;
+     player.scrollmin-=ViewScrollRate();
+     player.scrollmax-=ViewScrollRate();
      }
    else scrollview=0;
    }
@@ -1957,7 +1981,9 @@ void ControlMovement (void)
        don't let an accumulated delta land on it by accident. */
     if (scrollview!=255)
      {
-      scrollview-=(mly*sens)/96;
+      /* Also view rows: the same wrist movement must cover the same
+	 fraction of the view at any render resolution. */
+      scrollview-=(mly*sens*windowHeight)/(96*INIT_VIEW_HEIGHT);
       if (scrollview==255) scrollview=254;
       }
     }
@@ -2149,7 +2175,7 @@ void newlights(void)
 void ChangeScroll(void)
 {
  if (scrollview==255) return;
- if (player.scrollmin+scrollview<=-MAXSCROLL || player.scrollmin+scrollview>=MAXSCROLL)
+ if (player.scrollmin+scrollview<=-viewscroll || player.scrollmin+scrollview>=viewscroll)
   {
    scrollview=0;
    return;
@@ -2717,11 +2743,15 @@ extern pevent_t playerdata[MAXPLAYERS];
 
 void RearView(void)
 {
- int scrollmin1, scrollmax1, view;
+ int scrollmin1, scrollmax1, view, savedhd;
  intptr_t location;
 
  view=currentViewSize*2;
  location=viewLocation;
+ /* The camera is a 64x64 square shown as a square, so it wants the plain
+    square projection whatever the main view is using. */
+ savedhd=hdmode;
+ hdmode=0;
  windowWidth=64;
  windowHeight=64;
  windowLeft=0;
@@ -2744,7 +2774,9 @@ void RearView(void)
  windowLeft=viewLoc[view];
  windowTop=viewLoc[view+1];
  viewLocation=location;
- SetViewSize(viewSizes[view],viewSizes[view+1]);
+ hdmode=savedhd;
+ /* Back to the real view size -- in HD that is not an entry in viewSizes[]. */
+ SetViewSize(mainViewWidth,mainViewHeight);
  ResetScalePostWidth(windowWidth);
  memcpy(pixelangle,wallpixelangle,sizeof(pixelangle));
  memcpy(pixelcosine,wallpixelcosine,sizeof(pixelcosine));
@@ -2938,9 +2970,9 @@ void DrawHolo(void)
     bottom=*(collumn);
     count=bottom-top+1;
     collumn+=2;
-    y=windowHeight-top-count-5;
+    y=hudHeight-top-count-5;
     for (j=0;j<count;j++,collumn++,y++)
-     if (y>=0 && *collumn) *(viewylookup[y]+x)=*collumn;
+     if (y>=0 && *collumn) *(hudylookup[y]+x)=*collumn;
     }
  }
 
@@ -3087,7 +3119,33 @@ void UpdateView(fixed_t px,fixed_t py,fixed_t pz,int angle,int update)
 
  if (update)
   rtimecount=timecount;
+
+ /* The original never cleared the view buffer: floors, ceilings and walls
+    always covered every pixel, so there was nothing to clear.  That stopped
+    being true in HD, where a polygon can legitimately be skipped -- a ceiling
+    whose projection is out of range, a tile carrying no flat, a malformed
+    polygon that trips RenderPolygon's guard.  Uncovered pixels then show
+    whatever the previous frame left there, which reads as torn rectangles and
+    diagonal seams of an older room rather than as a hole.
+
+    Only in HD, and only the extent actually in use; at 1.3 Mpixel this is
+    tens of microseconds against a frame that costs milliseconds. */
+ /* Safe point for a deferred resize: nothing of this frame is drawn yet. */
+ if (hdresizepending)
+  {
+   hdresizepending=0;
+   VI_ApplyRenderMode();
+   }
+
+ if (hdmode)
+  memset(viewbuffer,0,(size_t)windowWidth*windowHeight);
+
  RF_RenderView(px,py,pz,angle);
+
+ /* In HD the 2D chrome is a separate 320x200 layer composited over the view,
+    so it starts each frame empty.  Index 0 is the engine's existing "nothing
+    drawn" value -- every VI_DrawMaskedPic* already skips it. */
+ if (hdmode) memset(screen,0,SCREENWIDTH*SCREENHEIGHT);
 
  if (update==1) TimeUpdate();
 
@@ -3097,15 +3155,15 @@ void UpdateView(fixed_t px,fixed_t py,fixed_t pz,int angle,int update)
 
  if (timecount<RearViewTime)
   {
-   x=windowWidth-66;
+   x=hudWidth-66;
    for(i=1;i<64;i++)
     {
-     memcpy(viewylookup[i+1]+x,rearbuf+(i<<6),64);
-     *(viewylookup[i+1]+x-1)=30;
-     *(viewylookup[i+1]+x+64)=30;
+     memcpy(hudylookup[i+1]+x,rearbuf+(i<<6),64);
+     *(hudylookup[i+1]+x-1)=30;
+     *(hudylookup[i+1]+x+64)=30;
      }
-   memset(viewylookup[65]+x-1,30,66);
-   memset(viewylookup[1]+x-1,30,66);
+   memset(hudylookup[65]+x-1,30,66);
+   memset(hudylookup[1]+x-1,30,66);
    }
 
 /* update sprite movement */
@@ -3118,8 +3176,8 @@ void UpdateView(fixed_t px,fixed_t py,fixed_t pz,int angle,int update)
    if (update)
     wpic=weaponpic[weapmode];
 
-   weaponx=((windowWidth-wpic->width)>>1) + (weapmove[weapbob1]>>1);
-   weapony=windowHeight - wpic->height + (weapmove[weapbob1/2]>>3);
+   weaponx=((hudWidth-wpic->width)>>1) + (weapmove[weapbob1]>>1);
+   weapony=hudHeight - wpic->height + (weapmove[weapbob1/2]>>3);
 
      if (currentViewSize>=6) weapony+=25;
       else if (currentViewSize==5) weapony+=15;
@@ -3127,7 +3185,7 @@ void UpdateView(fixed_t px,fixed_t py,fixed_t pz,int angle,int update)
       {
        weaponychange+=15;
        weapony+=weaponychange;
-       if (weapony>=windowHeight-20)
+       if (weapony>=hudHeight-20)
 	{
 	 weaponlowering=false;
 	 player.currentweapon=newweapon;
@@ -3135,8 +3193,8 @@ void UpdateView(fixed_t px,fixed_t py,fixed_t pz,int angle,int update)
 	 weapmode=0;
 	 wpic=weaponpic[weapmode];
 	 weaponychange=weaponpic[weapmode]->height-20;
-	 weapony=windowHeight-21;
-	 weaponx=((windowWidth-wpic->width)>>1) + (weapmove[weapbob1]>>1);
+	 weapony=hudHeight-21;
+	 weaponx=((hudWidth-wpic->width)>>1) + (weapmove[weapbob1]>>1);
 	 }
        }
      else if (changingweapons)
@@ -3331,7 +3389,7 @@ void PlayLoop (void)
      }
    if (firegrenade)
     {
-     SpawnSprite(S_GRENADE,player.x,player.y,player.z,player.height-(50<<FRACBITS),player.angle,(-player.scrollmin)&ANGLES,true,playernum);
+     SpawnSprite(S_GRENADE,player.x,player.y,player.z,player.height-(50<<FRACBITS),player.angle,ScrollAngle(),true,playernum);
      SoundEffect(SN_GRENADE,0,player.x,player.y);
      if (netmode) NetSoundEffect(SN_GRENADE,0,player.x,player.y);
      --player.inventory[2];
@@ -3481,7 +3539,24 @@ void PlayLoop (void)
 
    RF_BlitView();
    VI_BlitView();
-  
+   if (getenv("GREED_REPRO"))
+    {
+     extern void VI_DumpPresented(char*);
+     static int a0, done; static longint lastt; char path[300];
+     if (!a0) a0=player.angle|0x10000;
+     if (timecount!=lastt)
+      {
+       lastt=timecount;
+       if (timecount<140) {}
+       else if (timecount<170) player.angle=((a0&0xffff)+512)&ANGLES;
+       else if (timecount<535) Thrust(player.angle,40<<10);
+       else if (timecount<565) player.angle=(a0&0xffff)&ANGLES;
+       else if (!done)
+        { sprintf(path,"%s",getenv("GREED_REPRO"));
+          printf("REPROSHOT view=%dx%d proj=%d\n",windowWidth,windowHeight,viewproj);
+          VI_DumpPresented(path); done=1; exit(0); }
+       }
+     }
    if (newsong) SelectNewSong();
 
    if (activatemenu) RunMenu();

@@ -53,7 +53,10 @@ void InitWalls(void)
  // traces go through the RIGHT EDGE of the pixel to follow the direction
  for (i=0;i<windowWidth+1; i++)
   {
-   intval=rint(atan(((double)CENTERX-((double)i+1.0))/(double)CENTERX)/(double)PI*(double)TANANGLES*(double)2);
+   /* CENTERX in the numerator is the centre of the view; the divisor is the
+      projection scale, which is only the same number when the view is shown in
+      a 4:3 box.  See SetViewSize. */
+   intval=rint(atan(((double)CENTERX-((double)i+1.0))/(double)viewproj)/(double)PI*(double)TANANGLES*(double)2);
    pixelangle[i]=intval;
    pixelcosine[i]=cosines[intval&(TANANGLES * 4 - 1)];
    }
@@ -83,7 +86,7 @@ void DrawWall(int x1,int x2)
  int      x;      // collumn and ranges
  int      light;
  short    *wall;
- unsigned span;
+ spantag_t span;
  span_t   *span_p;
  int      rotateright, rotateleft, transparent, rotateup, rotatedown, invisible;
 
@@ -215,9 +218,9 @@ void DrawWall(int x1,int x2)
     wallz[x]=pointz;
 
    // calculate the size and scale of the post
-   sp_fracstep=FIXEDMUL(pointz,ISCALE);
+   sp_fracstep=TEXELSTEP(pointz);
    scale=sp_fracstep;
-   if (scale<1000) continue;
+   if (scale<viewminscale) continue;
    top=FIXEDDIV(ceiling,scale)+FRACUNIT;
    topy=CENTERY - (top>>FRACBITS);
    fracadjust=top & (FRACUNIT-1);
@@ -231,7 +234,8 @@ void DrawWall(int x1,int x2)
    if (topy<scrollmin)
     {
      sp_frac+=(scrollmin-topy)*scale;
-     while (sp_frac>=sp_loopvalue) sp_frac-=sp_loopvalue;
+     if (sp_loopvalue>0)
+        while (sp_frac>=sp_loopvalue) sp_frac-=sp_loopvalue;
      topy=scrollmin;
      }
    bottom=FIXEDDIV(floor,scale)+FRACUNIT*2;
@@ -243,7 +247,7 @@ void DrawWall(int x1,int x2)
    sp_dest=viewylookup[bottomy-scrollmin]+x;
    if (transparent)
     {
-     span=(pointz<<ZTOFRAC)&ZMASK;
+     span=((spantag_t)pointz<<ZTOFRAC)&ZMASK;
      spansx[numspans]=x;
      span|=numspans;
      spantags[numspans]=span;
@@ -262,10 +266,8 @@ void DrawWall(int x1,int x2)
      tpwalls_colormap[transparentposts]=sp_colormap;
      tpwalls_count[transparentposts]=sp_count;
      transparentposts++;
-#ifdef VALIDATE
      if (transparentposts>=MAXPEND) MS_Error("Too many Pending Posts! (%i>=%i)",transparentposts,MAXPEND);
      if (numspans>=MAXSPANS) MS_Error("MAXSPANS exceeded, Walls (%i>=%i)",numspans,MAXSPANS);
-#endif
      }
     else ScalePost();
    }
@@ -292,7 +294,7 @@ void DrawSteps(int x1, int x2)
  int      x;      // collumn and ranges
  int      light;
  short    *wall1, *wall2;
- unsigned span;
+ spantag_t span;
  span_t   *span_p;
  int      walltype1, walltype2, c, rotateright1, rotateright2;
  int      rotateleft1, rotateleft2, tm;
@@ -442,9 +444,9 @@ skipceilingcalc:
 
    texture=(textureadjust+FIXEDMUL(distance,tangents[angle]))>>FRACBITS;
 
-   scale=FIXEDMUL(pointz,ISCALE);
+   scale=TEXELSTEP(pointz);
 
-   if (scale<1000) continue;
+   if (scale<viewminscale) continue;
 
    sp_fracstep=scale;
 
@@ -466,7 +468,8 @@ skipceilingcalc:
       {
        sp_frac+=(scrollmin-topy)*scale;
        sp_loopvalue=(*wall1 * 4)<<FRACBITS;
-       while (sp_frac>=sp_loopvalue) sp_frac-=sp_loopvalue;
+       if (sp_loopvalue>0)
+        while (sp_frac>=sp_loopvalue) sp_frac-=sp_loopvalue;
        topy=scrollmin;
        }
      if (rotatedown1)
@@ -480,7 +483,7 @@ skipceilingcalc:
      if ((bottomy<scrollmin)||(topy>=scrollmax)) goto contceiling;
      sp_count=bottomy-topy+1;
      sp_dest=viewylookup[bottomy-scrollmin]+x;
-     span=(pointz<<ZTOFRAC)&ZMASK;
+     span=((spantag_t)pointz<<ZTOFRAC)&ZMASK;
      spansx[numspans]=x;
      span|=numspans;
      spantags[numspans]=span;
@@ -496,10 +499,8 @@ skipceilingcalc:
      tpwalls_colormap[transparentposts]=sp_colormap;
      tpwalls_count[transparentposts]=sp_count;
      transparentposts++;
-  #ifdef VALIDATE
      if (transparentposts>=MAXPEND) MS_Error("Too many Pending Posts! (%i>=%i)",transparentposts,MAXPEND);
      if (numspans>=MAXSPANS) MS_Error("MAXSPANS exceeded, FloorDefs (%i>=%i)",numspans,MAXSPANS);
-  #endif
      }
 
 contceiling:
@@ -521,7 +522,8 @@ contceiling:
       {
        sp_frac+=(scrollmin-topy)*scale;
        sp_loopvalue=(*wall2 * 4)<<FRACBITS;
-       while (sp_frac>=sp_loopvalue) sp_frac-=sp_loopvalue;
+       if (sp_loopvalue>0)
+        while (sp_frac>=sp_loopvalue) sp_frac-=sp_loopvalue;
        topy=scrollmin;
        }
      if (rotatedown2)
@@ -535,7 +537,7 @@ contceiling:
      if (bottomy<scrollmin|| topy>=scrollmax) continue;
      sp_count=bottomy-topy+1;
      sp_dest=viewylookup[bottomy-scrollmin]+x;
-     span=(pointz<<ZTOFRAC)&ZMASK;
+     span=((spantag_t)pointz<<ZTOFRAC)&ZMASK;
      spansx[numspans]=x;
      span|=numspans;
      spantags[numspans]=span;
@@ -551,10 +553,8 @@ contceiling:
      tpwalls_colormap[transparentposts]=sp_colormap;
      tpwalls_count[transparentposts]=sp_count;
      transparentposts++;
-  #ifdef VALIDATE
      if (transparentposts>=MAXPEND) MS_Error("Too many Pending Posts! (%i>=%i)",transparentposts,MAXPEND);
      if (numspans>=MAXSPANS) MS_Error("MAXSPANS exceeded, CeilingDefs (%i>=%i)",numspans,MAXSPANS);
-  #endif
      }
    }
 

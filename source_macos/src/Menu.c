@@ -123,10 +123,18 @@ cursor_t cursors[MENUS][15]=
    134, 60, 127, 15,
    134, 74, 127, 15,
    134, 88, 127, 15,
-   134, 101, 127, 15,
-   134, 115, 127, 15,
+   /* Rows 7-9 replace what used to be one baked "screen size" row at
+      134,101 and one "camera delay" row at 134,115.  The screen size slider
+      was a 1995 way to buy frame rate by rendering less of the view; it is
+      pointless now and was in fact broken below full size (RF_BlitView copies
+      a fixed 320x200 and ignores windowWidth).  Its space, plus the blank
+      panel strip below the old last row, is repainted by MenuShowOptions and
+      relabelled here -- which is also where fullscreen fits without needing a
+      whole extra menu screen there is no artwork for. */
+   134, 103, 127, 11,   // renderer: original / HD
+   134, 114, 127, 11,   // fullscreen
+   134, 125, 127, 10,   // camera delay
    142, 142, 62, 15,
-   0, 0, 0, 0,
    0, 0, 0, 0,
    0, 0, 0, 0,
    0, 0, 0, 0,
@@ -154,7 +162,7 @@ cursor_t cursors[MENUS][15]=
 
 
 int menumax[MENUS]=               // max cursor
- { 7, 7, 12, 12, 10, 8 };
+ { 7, 7, 12, 12, 11, 8 };
 
 
 /**** VARIABLES ****/
@@ -249,6 +257,13 @@ bool ShowQuit(void (*kbdfunction)(void))
  animtime=timecount;
  while (1)
   {
+   /* Already quitting -- answer the dialog's own question yes, so the caller
+      unwinds the same way it would have if the player had clicked it. */
+   if (quitgame)
+    {
+     c='y';
+     break;
+     }
    if (y>=67 && MouseGetClick(&mx,&my) && my>=110 && my<=117)
     {
      if (mx>=130 && mx<=153)
@@ -300,6 +315,7 @@ bool ShowQuit(void (*kbdfunction)(void))
  while (y<199)
   {
    Sys_PumpFrame();     /* y only advances when timecount does */
+   if (quitgame) break;
    if (timecount>=droptime)
     {
      if (y>=0) memcpy(ylookup[y],viewbuffer+320*y,640);
@@ -429,9 +445,81 @@ void ShowSaveDir(void)
  }
 
 
+/* The bottom three option rows have no baked artwork -- see the note in
+   cursors[] -- so their labels are drawn.  The panel interior is palette index
+   1; repainting with that rather than 0 keeps them sitting on the same
+   background as the rows above instead of in a black box. */
+#define OPTPANEL_X    132
+#define OPTPANEL_W    130
+#define OPTPANEL_Y    103
+#define OPTPANEL_H    32
+
+static void MenuDrawOptionRow(int y, char *label, char *value)
+{
+ /* font1's glyphs are a 1..6 vertical gradient added to fontbasecolor, so 228
+    lands them on 229..234 -- the same amber ramp the baked labels above are
+    drawn in. */
+ fontbasecolor=228;
+ font=font1;
+ printx=140;
+ printy=y;
+ FN_RawPrint3(label);
+ printx=212;
+ printy=y;
+ FN_RawPrint3(value);
+ }
+
+
+/* The value also goes in the preview box at (35,29), where the slider rows put
+   their widget bitmap.  That is the established shape of this screen: the
+   violence and animation rows show their state there too, as artwork. */
+static void MenuShowOptionValue(char *value)
+{
+ int i;
+
+ for(i=29;i<80;i++)
+  memset(ylookup[i]+35,0,64);
+ fontbasecolor=228;
+ font=font1;
+ printx=35+(64-FN_RawWidth(value))/2;
+ printy=52;
+ FN_RawPrint3(value);
+ }
+
+
+/* Drawn last, by everything that repaints under it -- see MenuShowCursor. */
+void MenuDrawCursorBox(void)
+{
+ int x, y, w, h, i;
+
+ if (menucurloc==-1) return;
+ x=cursors[menulevel][menucurloc].x;
+ y=cursors[menulevel][menucurloc].y;
+ w=cursors[menulevel][menucurloc].w;
+ h=cursors[menulevel][menucurloc].h;
+ if (!w || !h) return;
+ memset(ylookup[y]+x,133,w);
+ memset(ylookup[y+h-1]+x,133,w);
+ for(i=y;i<y+h;i++)
+  {
+   *(ylookup[i]+x)=133;
+   *(ylookup[i]+x+w-1)=133;
+   }
+ }
+
+
 void MenuShowOptions(void)
 {
+ int i;
+
  MouseHide();
+
+ for(i=OPTPANEL_Y;i<OPTPANEL_Y+OPTPANEL_H;i++)
+  memset(ylookup[i]+OPTPANEL_X,1,OPTPANEL_W);
+ MenuDrawOptionRow(105,"RENDERER",SC.hdmode ? "HD" : "ORIGINAL");
+ MenuDrawOptionRow(116,"FULLSCREEN",SC.fullscreen ? "ON" : "OFF");
+ MenuDrawOptionRow(127,"CAMERA DELAY","");
+
  switch (menucursor)
   {
    case 2: // music vol
@@ -458,15 +546,18 @@ void MenuShowOptions(void)
     VI_DrawPic(35,29,CA_CacheLump(CA_GetNamedNum("menuambsli")));
     ShowMenuSliders(SC.ambientlight,4096);
     break;
-   case 7: // screen size
-    VI_DrawPic(35,29,CA_CacheLump(CA_GetNamedNum("menuscrsli")));
-    ShowMenuSliders(10-SC.screensize,10);
+   case 7: // renderer
+    MenuShowOptionValue(SC.hdmode ? "HD" : "ORIGINAL");
     break;
-   case 8: // asscam
+   case 8: // fullscreen
+    MenuShowOptionValue(SC.fullscreen ? "ON" : "OFF");
+    break;
+   case 9: // asscam
     VI_DrawPic(35,29,CA_CacheLump(CA_GetNamedNum("menucamsli")));
     ShowMenuSliders(SC.camdelay,70);
     break;
    }
+ MenuDrawCursorBox();
  MouseShow();
  }
 
@@ -514,16 +605,16 @@ void MenuLeft(void)
 	lighting=1;
 	}
       break;
-     case 7: // screensize
-      if (SC.screensize<9)
-       {
-	SC.screensize++;
-	ShowMenuSliders(10-SC.screensize,10);
-	timedelay=timecount+KBDELAY2;
-	goleft=false;
-	}
+     case 7: // renderer
+      SC.hdmode=0;
+      MenuShowOptions();
       break;
-     case 8: // camera delay
+     case 8: // fullscreen
+      SC.fullscreen=1;
+      VI_SetFullscreen(SC.fullscreen);
+      MenuShowOptions();
+      break;
+     case 9: // camera delay
       if (SC.camdelay)
        {
 	SC.camdelay--;
@@ -579,16 +670,16 @@ void MenuRight(void)
 	lighting=1;
 	}
       break;
-     case 7: // screensize
-      if (SC.screensize)
-       {
-	SC.screensize--;
-	ShowMenuSliders(10-SC.screensize,10);
-	timedelay=timecount+KBDELAY2;
-	goright=false;
-	}
+     case 7: // renderer
+      SC.hdmode=1;
+      MenuShowOptions();
       break;
-     case 8: // camera delay
+     case 8: // fullscreen
+      SC.fullscreen=0;
+      VI_SetFullscreen(SC.fullscreen);
+      MenuShowOptions();
+      break;
+     case 9: // camera delay
       if (SC.camdelay<70)
        {
 	SC.camdelay++;
@@ -656,21 +747,14 @@ void MenuShowCursor(int menucursor)
  MouseHide();
  VI_DrawMaskedPic(20,15,CA_CacheLump(CA_GetNamedNum("menumain")+menulevel));
  menucurloc=menucursor;
- x=cursors[menulevel][menucurloc].x;
- y=cursors[menulevel][menucurloc].y;
- w=cursors[menulevel][menucurloc].w;
- h=cursors[menulevel][menucurloc].h;
- memset(ylookup[y]+x,133,w);
- memset(ylookup[y+h-1]+x,133,w);
- for(i=y;i<y+h;i++)
-  {
-   *(ylookup[i]+x)=133;
-   *(ylookup[i]+x+w-1)=133;
-   }
- MouseShow();
+ /* Contents first, highlight second.  MenuShowOptions repaints the bottom of
+    the options panel to redraw the three rows that have no baked artwork, and
+    with the old order that repaint landed on top of the highlight rectangle
+    and erased it for exactly those rows. */
  if (menulevel==2 || menulevel==3) ShowSaveDir();
  if (menulevel==4) MenuShowOptions();
-
+ MenuDrawCursorBox();
+ MouseShow();
  }
 
 
@@ -721,11 +805,12 @@ void GetSavedName(int menucursor)
    for(i=0;i<6;i++)
     memset(ylookup[printy+i]+printx,0,100);
    FN_Printf(savedir[menucursor]);
-   while (!newascii)   // wait for a new key
+   while (!newascii && !quitgame)   // wait for a new key
     {
      Sys_PumpFrame();   /* newascii is set from the event pump */
      MenuShowCursor(menucursor+1);
      }
+   if (quitgame) return;
    switch (lastascii)
     {
      case 27:
@@ -889,10 +974,21 @@ void Execute(int level,int cursor)
       case 4: // violence
       case 5: // animations
       case 6: // ambient light
-      case 7: // screen size
-      case 8: // camera delay
+      case 9: // camera delay
        break;
-      case 9:
+      /* The rows above are driven by the left/right arrows drawn into their
+	 widget bitmaps.  These two have no bitmap and so no arrows to click,
+	 so Enter -- and a click on the row -- toggles them instead. */
+      case 7: // renderer
+       SC.hdmode=!SC.hdmode;
+       MenuShowOptions();
+       break;
+      case 8: // fullscreen
+       SC.fullscreen=!SC.fullscreen;
+       VI_SetFullscreen(SC.fullscreen);
+       MenuShowOptions();
+       break;
+      case 10:
        downlevel=true;
        break;
       }
@@ -954,6 +1050,7 @@ void MenuAnimate(void)
  while (1)
   {
    Sys_PumpFrame();     /* timecount only advances from the tick */
+   if (quitgame) break;
    if (timecount>=waittime)
     {
      ++frame;
@@ -1031,16 +1128,9 @@ void CheckMouse(void)
 	lighting=1;
 	}
       break;
-     case 7:
-      if (y>=49 && y<=64 && x>=42 && x<=90)
-       {
-	SC.screensize=9-(((x-40)*10)/49);
-	if (SC.screensize>9) SC.screensize=9;
-	else if (SC.screensize<0) SC.screensize=0;
-	ShowMenuSliders(10-SC.screensize,10);
-	}
-      break;
-     case 8:
+     /* 7 and 8 have no slider and no arrows; clicking the row runs Execute,
+	which toggles them. */
+     case 9:
       if (y>=49 && y<=64 && x>=42 && x<=90)
        {
 	SC.camdelay=((x-40)*70)/49;
@@ -1101,7 +1191,7 @@ void ShowMenu(int n)
       never sees any of them change and the game locks up on Esc. */
    Sys_PumpFrame();
    if (netmode) TimeUpdate();
-   } while (!quitmenu);
+   } while (!quitmenu && !quitgame);
  MouseHide();
  memcpy(screen,scr,64000);
  free(scr);
@@ -1115,6 +1205,12 @@ void ShowMenu(int n)
       ChangeViewSize(false);
      }
    }
+ /* Applied on the way out rather than live, the way the view size always has
+    been: it rebuilds the projection tables and both textures.  Re-applied
+    whenever HD is active, not only on a change, because the fullscreen row
+    above may just have altered the window the HD resolution is derived from. */
+ if (SC.hdmode!=hdmode || hdmode)
+  VI_ApplyRenderMode();
  SaveSetup(&SC,"SETUP.CFG");
  turnrate=0;
  moverate=0;
@@ -1154,7 +1250,7 @@ void ShowHelp(void)
   {
    Wait(10);
    if (netmode) TimeUpdate();
-   if (newascii) break;
+   if (newascii || quitgame) break;
    }
  VI_FillPalette(0,0,0);
  memset(screen,0,64000);
@@ -1167,7 +1263,7 @@ void ShowHelp(void)
   {
    Wait(10);
    if (netmode) TimeUpdate();
-   if (newascii) break;
+   if (newascii || quitgame) break;
    }
  VI_FillPalette(0,0,0);
  memset(screen,0,64000);
@@ -1179,7 +1275,7 @@ void ShowHelp(void)
   {
    Wait(10);
    if (netmode) TimeUpdate();
-   if (newascii) break;
+   if (newascii || quitgame) break;
    }
  memset(screen,0,64000);
  VI_FillPalette(0,0,0);
@@ -1223,7 +1319,7 @@ void ShowPause(void)
  droptime=timecount;
  animtime=timecount;
  newascii=false;
- while (!CheckPause())
+ while (!CheckPause() && !quitgame)
   {
    Sys_PumpFrame();     /* CheckPause reads keyboard[]; timecount ticks here */
    if (timecount>=droptime && y<72)
@@ -1246,6 +1342,7 @@ void ShowPause(void)
  while (y<199)
   {
    Sys_PumpFrame();     /* y only advances when timecount does */
+   if (quitgame) break;
    if (timecount>=droptime)
     {
      if (y>=0) memcpy(ylookup[y],viewbuffer+320*y,640);

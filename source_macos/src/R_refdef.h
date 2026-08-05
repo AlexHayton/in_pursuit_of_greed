@@ -30,12 +30,33 @@
 #define MAXVISVERTEXES 1536  // max tile corners visible at once
 
 // for spans
-#define MAXSPANS       4096
-#define ZSHIFT         12
-#define ZTOFRAC        4                 // shift the Z into frac position
-#define ZMASK          (0xfffff<<ZSHIFT) // 20 bits
-#define SPANMASK       0x000000fff       // 12 bits
-#define MAXPEND        3072
+/* A span tag packs the span's depth and its index in spans[] into one integer,
+   so that sorting the tags sorts the spans back to front (descending: see
+   Partition in R_spans.c).  Depth is the high-order field and must stay there.
+
+   This was 32 bits -- 20 of z above 12 of index -- with every bit spoken for,
+   so MAXSPANS could not be raised past 4096 without re-encoding.  4096 is
+   about 20 spans per scanline at 200 rows and does not survive a taller view.
+   The tag is now 64 bits with a 20-bit index field; the z field keeps its
+   width, its contents and its position relative to the index, so the sort
+   order is exactly what it was.
+
+   ZTOFRAC lands pointz's bits 8..27 in the z field.  The low 8 bits of the
+   16.16 depth are dropped, as they always were -- the tag only has to order
+   spans and pick a colormap row, not reproduce the depth exactly.
+
+   MAXSPANS is deliberately generous: the peak is not known until the renderer
+   actually runs at a taller view, and the arrays below are zerofill, so the
+   cost is address space rather than resident memory (spans[] 12 MB, spantags[]
+   2 MB, spansx[] 1 MB -- __common goes from 1.4 MB to 16.8 MB).  Guessing low
+   is safe now that the overflow checks below are compiled in unconditionally:
+   it fails with a message instead of walking off the end of spans[]. */
+#define MAXSPANS       262144
+#define ZSHIFT         20
+#define ZTOFRAC        12                     // shift the Z into frac position
+#define ZMASK          (0xfffffULL<<ZSHIFT)   // 20 bits
+#define SPANMASK       0xfffffULL             // 20 bits
+#define MAXPEND        32768
 #define MAXAUTO        (16*16)
 
  /* flags */
@@ -84,6 +105,11 @@ typedef struct
      LP64.  intptr_t keeps both uses working. */
   intptr_t shadow;
   } span_t;
+
+/* The packed depth+index sort key; see the MAXSPANS note above.  Must be wider
+   than 32 bits, and must be unsigned so the sort compares the z field as a
+   magnitude. */
+typedef unsigned long long spantag_t;
 
 typedef struct
  {
@@ -159,8 +185,8 @@ extern int         mr_xstep;          // fixed point step value
 extern int         mr_ystep;          // fixed point step value
 extern int         mr_count;          // the number of pixels to draw
 extern intptr_t    mr_shadow;   /* mode code or colormap pointer; see span_t */
-extern unsigned    spantags[MAXSPANS];
-extern unsigned    *starttaglist_p, *endtaglist_p;
+extern spantag_t   spantags[MAXSPANS];
+extern spantag_t   *starttaglist_p, *endtaglist_p;
 extern span_t      spans[MAXSPANS], *spans_p;
 extern int         spansx[MAXSPANS];
 extern int         numspans;
@@ -180,6 +206,7 @@ extern fixed_t     afrac, hfrac;
 
 /**** FUNCTIONS ****/
 
+int      ProjectOffset(fixed_t v, fixed_t scale);
 void     SetupFrame(void);
 vertex_t *TransformVertex(int tilex, int tiley);
 void     FlowView();

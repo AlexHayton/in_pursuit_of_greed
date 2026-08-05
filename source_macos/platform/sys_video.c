@@ -20,7 +20,16 @@
       Presenting it at its literal 1.6:1 aspect makes everything look
       squashed, so the destination rect is computed for 4:3.  That is also why
       SDL_SetRenderLogicalPresentation isn't used -- its letterbox mode would
-      preserve the texture's own aspect, which is precisely the wrong one. */
+      preserve the texture's own aspect, which is precisely the wrong one.
+
+   3. The window is created with SDL_WINDOW_HIGH_PIXEL_DENSITY.  Without it SDL
+      pins the macOS backing store to 1x and the compositor bilinearly upscales
+      that to the Retina panel -- so the chunky-pixel scale mode below was being
+      undone by an OS blur applied afterwards.  With it we own every device
+      pixel.  The cost is that window points and window pixels are no longer
+      the same number: SDL delivers mouse coordinates in points, the renderer
+      draws in pixels, and Sys_GetPresentRect below is unit-agnostic precisely
+      so both can share one shape without sharing one unit. */
 
 #include "sys_compat.h"
 
@@ -32,8 +41,11 @@
 #include "d_disk.h"
 #include "d_misc.h"
 #include "d_video.h"
+#include "protos.h"
 #include "r_public.h"
 #include "r_refdef.h"
+
+extern SoundCard SC;
 
 #define VGA_W 320
 #define VGA_H 200
@@ -42,14 +54,25 @@
 #define ASPECT_W 4.0f
 #define ASPECT_H 3.0f
 
+/* HD renders the 3D view at the display's own pixel count and aspect, capped so
+   a 1995 software rasteriser can still hit a frame.  1.3 Mpixel is ~20x the
+   320x200 workload.  See VI_ApplyRenderMode for how the buffer shape follows
+   from the display aspect. */
+#define HD_MAX_PIXELS 1300000
+
 static SDL_Window   *window;
 static SDL_Renderer *renderer;
-static SDL_Texture  *texture;
+static SDL_Texture  *texture;    /* the 3D view: 320x200, or hdw x hdh in HD */
+static SDL_Texture  *overlay;    /* HD only: the 320x200 chrome, keyed on 0 */
+
+static int hdw, hdh;             /* HD view buffer size */
 
 static Uint32 lut[256];        /* palette index -> ARGB8888 */
 static byte   curpal[768];     /* current palette, 6-bit VGA levels */
 
-static Uint32 *convbuf;        /* 320x200 ARGB scratch for the row flip */
+
+static Uint32 *convbuf;        /* ARGB scratch, big enough for the 3D texture */
+static int     convbuf_px;
 
 
 SDL_Window *Sys_GetWindow(void)
@@ -80,13 +103,20 @@ static void rebuild_lut(void)
 
 void VI_Init(int specialbuffer)
 {
-    int y;
+    int            y;
+    SDL_WindowFlags flags;
 
     (void)specialbuffer;
 
+    /* InitSound has already read SETUP.CFG by the time LoadData gets here, so
+       SC.fullscreen is the value from the last run. */
+    flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    if (SC.fullscreen)
+        flags |= SDL_WINDOW_FULLSCREEN;
+
     window = SDL_CreateWindow("In Pursuit of Greed",
                               VGA_W * 4, (int)(VGA_H * 1.2f) * 4,
-                              SDL_WINDOW_RESIZABLE);
+                              flags);
     if (!window)
         MS_Error("VI_Init: SDL_CreateWindow failed: %s", SDL_GetError());
 
@@ -96,19 +126,8 @@ void VI_Init(int specialbuffer)
 
     SDL_SetRenderVSync(renderer, 1);
 
-    texture = SDL_CreateTexture(renderer,
-                                SDL_PIXELFORMAT_ARGB8888,
-                                SDL_TEXTUREACCESS_STREAMING,
-                                VGA_W, VGA_H);
-    if (!texture)
-        MS_Error("VI_Init: SDL_CreateTexture failed: %s", SDL_GetError());
-
-    /* Chunky 1995 pixels, not a blur. */
-    SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
-
-    convbuf = (Uint32 *)malloc(VGA_W * VGA_H * sizeof(Uint32));
     screen  = (byte *)malloc(VGA_W * VGA_H);
-    if (!screen || !convbuf)
+    if (!screen)
         MS_Error("VI_Init: Out of memory for screen");
     memset(screen, 0, VGA_W * VGA_H);
 
@@ -121,48 +140,292 @@ void VI_Init(int specialbuffer)
         translookup[y] = transparency + 256 * y;
 
     rebuild_lut();
+
+    VI_ApplyRenderMode();
+}
+
+
+/* Rebuild the renderer for SC.hdmode.  Safe to call again at any time; the
+   menu calls it on exit when the setting has changed. */
+void VI_ApplyRenderMode(void)
+{
+    int   pw, ph, px;
+    int   oldheight;
+    float aspect;
+
+    oldheight = windowHeight;
+    hdmode = SC.hdmode ? 1 : 0;
+
+    if (hdmode) {
+        SDL_GetWindowSizeInPixels(window, &pw, &ph);
+        if (pw < 1 || ph < 1) { pw = VGA_W; ph = VGA_H; }
+        aspect = (float)pw / (float)ph;
+
+        /* The buffer is 1.2*aspect as wide as it is tall.  Presenting that
+           stretched to fill the window reproduces exactly the 1.2 vertical
+           stretch a 320x200 image already gets in a 4:3 box, which is what
+           keeps the vertical field of view at its original 64 degrees while the
+           horizontal opens up with the display.  See SetViewSize. */
+        hdh = (int)(SDL_sqrtf((float)HD_MAX_PIXELS / (1.2f * aspect)));
+        if (hdh > ph) hdh = ph;                 /* never exceed the panel */
+        if (hdh > MAX_VIEW_HEIGHT) hdh = MAX_VIEW_HEIGHT;
+        hdw = (int)(1.2f * aspect * (float)hdh);
+        if (hdw > MAX_VIEW_WIDTH) {
+            /* Wider than the scratch arrays allow; give up width-driven sizing
+               and keep the shape by shrinking the height to match. */
+            hdw = MAX_VIEW_WIDTH;
+            hdh = (int)((float)hdw / (1.2f * aspect));
+        }
+        hdw &= ~1;
+        hdh &= ~1;
+        if (hdw < VGA_W) hdw = VGA_W;
+        if (hdh < VGA_H) hdh = VGA_H;
+
+        if (getenv("HDSMALL")) { hdw=VGA_W; hdh=VGA_H; }
+        mainViewWidth = hdw;
+        mainViewHeight = hdh;
+    } else {
+        hdw = VGA_W;
+        hdh = VGA_H;
+        mainViewWidth = viewSizes[currentViewSize * 2];
+        mainViewHeight = viewSizes[currentViewSize * 2 + 1];
+    }
+
+    SetViewSize(mainViewWidth, mainViewHeight);
+    ResetScalePostWidth(windowWidth);
+    InitWalls();
+
+    /* Carry the player's view scroll across the resize.  scrollmin is a look
+       up/down offset in view rows and scrollmax is the bottom of the view, both
+       measured in the OLD view's rows -- and PlayLoop copies them into the
+       renderer's clip bounds every frame.  Left behind, they clip a tall HD
+       view to the old 200-row one and most of the screen is never drawn at all;
+       going the other way they point past the rows SetViewSize just filled in
+       viewylookup.  Only ChangeViewSize used to resize the view, and it kept
+       these in step; it is a no-op in HD, so this has to. */
+    if (oldheight > 0 && oldheight != windowHeight)
+        player.scrollmin = (player.scrollmin * windowHeight) / oldheight;
+    if (player.scrollmin >  viewscroll) player.scrollmin =  viewscroll;
+    if (player.scrollmin < -viewscroll) player.scrollmin = -viewscroll;
+    player.scrollmax = windowHeight + player.scrollmin;
+    scrollmin = player.scrollmin;
+    scrollmax = player.scrollmax;
+
+    if (texture) { SDL_DestroyTexture(texture); texture = NULL; }
+    if (overlay) { SDL_DestroyTexture(overlay); overlay = NULL; }
+
+    texture = SDL_CreateTexture(renderer,
+                                SDL_PIXELFORMAT_ARGB8888,
+                                SDL_TEXTUREACCESS_STREAMING,
+                                hdw, hdh);
+    if (!texture)
+        MS_Error("VI_ApplyRenderMode: SDL_CreateTexture failed: %s", SDL_GetError());
+
+    /* Chunky 1995 pixels, not a blur -- but not NEAREST either.  At a Retina
+       backing store the destination is almost never an integer multiple of the
+       source (320x200 into 2530x1898 is x 7.9, y 9.5), and NEAREST then makes
+       some source pixels one device pixel wider than their neighbours.
+       PIXELART keeps the hard edges while sizing every source pixel the same. */
+    SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_PIXELART);
+
+    if (hdmode) {
+        /* The 2D chrome stays 320x200 artwork and is drawn over the view.
+           Index 0 is already the engine's "nothing here" value: every
+           VI_DrawMaskedPic* skips it, so a cleared `screen` plus masked draws
+           means 0 marks exactly the untouched pixels. */
+        overlay = SDL_CreateTexture(renderer,
+                                    SDL_PIXELFORMAT_ARGB8888,
+                                    SDL_TEXTUREACCESS_STREAMING,
+                                    VGA_W, VGA_H);
+        if (!overlay)
+            MS_Error("VI_ApplyRenderMode: overlay texture failed: %s", SDL_GetError());
+        SDL_SetTextureScaleMode(overlay, SDL_SCALEMODE_PIXELART);
+        SDL_SetTextureBlendMode(overlay, SDL_BLENDMODE_BLEND);
+    }
+
+    px = hdw * hdh;
+    if (px < VGA_W * VGA_H) px = VGA_W * VGA_H;
+    if (px > convbuf_px) {
+        free(convbuf);
+        convbuf = (Uint32 *)malloc((size_t)px * sizeof(Uint32));
+        if (!convbuf)
+            MS_Error("VI_ApplyRenderMode: out of memory for %d pixels", px);
+        convbuf_px = px;
+    }
+
+    printf("Video:\t%s, view %dx%d\n", hdmode ? "HD" : "original", hdw, hdh);
+}
+
+
+/* The largest centred 4:3 box inside a winw x winh surface.
+
+   Unit-agnostic on purpose.  The renderer passes device pixels, the mouse code
+   passes window points, and with SDL_WINDOW_HIGH_PIXEL_DENSITY those differ by
+   the display scale.  What must not differ is the shape: this used to be
+   copy-pasted into sys_input.c, and two copies of a letterbox calculation are
+   two chances for a click to land somewhere other than what it looked like it
+   hit. */
+void Sys_GetPresentRect(float winw, float winh, SDL_FRect *dst)
+{
+    float scale;
+
+    scale = winw / ASPECT_W;
+    if (winh / ASPECT_H < scale)
+        scale = winh / ASPECT_H;
+
+    dst->w = ASPECT_W * scale;
+    dst->h = ASPECT_H * scale;
+    dst->x = (winw - dst->w) * 0.5f;
+    dst->y = (winh - dst->h) * 0.5f;
+}
+
+
+/* Window position -> 320x200 screen coordinates, for the menus.  Returns 0 for
+   a point in the letterbox bars, which are not part of any menu. */
+int Sys_MapWindowToGame(float mx, float my, short *x, short *y)
+{
+    SDL_FRect box;
+    int       winw, winh;
+
+    /* Points, not pixels: SDL_EVENT_MOUSE_BUTTON_DOWN and SDL_GetMouseState
+       both report in window points. */
+    SDL_GetWindowSize(window, &winw, &winh);
+    Sys_GetPresentRect((float)winw, (float)winh, &box);
+
+    if (mx < box.x || mx >= box.x + box.w || my < box.y || my >= box.y + box.h)
+        return 0;
+
+    if (x) *x = (short)((mx - box.x) / box.w * (float)VGA_W);
+    if (y) *y = (short)((my - box.y) / box.h * (float)VGA_H);
+
+    return 1;
+}
+
+
+void VI_SetFullscreen(int on)
+{
+    if (!window)
+        return;
+    /* 1/0 rather than true/false: sys_sdl.h has taken those names back for the
+       engine's 4-byte bool by this point, and this argument is SDL's _Bool. */
+    SDL_SetWindowFullscreen(window, on ? 1 : 0);
+}
+
+
+int VI_GetFullscreen(void)
+{
+    if (!window)
+        return 0;
+    return (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;
+}
+
+
+/* Expand an indexed buffer into convbuf.  `screen` and viewbuffer are both
+   top-down, exactly as VGA mode 13h was -- see the long note in D_video.c
+   before reintroducing any flip here. */
+static void expand(const byte *src, int w, int h)
+{
+    int i, n = w * h;
+
+    for (i = 0; i < n; i++)
+        convbuf[i] = lut[src[i]];
 }
 
 
 void VI_BlitView(void)
 {
-    int         x, y;
     SDL_FRect   dst;
-    int         winw, winh;
-    float       scale;
+    int         winw, winh, i, n, x, y;
 
     if (!renderer || !texture)
         return;
 
-    /* Expand indexed -> ARGB, row for row.  `screen` is top-down, exactly as
-       VGA mode 13h was -- see the long note in D_video.c before reintroducing
-       any flip here. */
-    for (y = 0; y < VGA_H; y++) {
-        const byte *src = screen + y * VGA_W;
-        Uint32     *dstrow = convbuf + y * VGA_W;
+    /* Pixels, not points: with no logical presentation set, SDL3 renderer
+       coordinates are device pixels. */
+    SDL_GetWindowSizeInPixels(window, &winw, &winh);
 
-        for (x = 0; x < VGA_W; x++)
-            dstrow[x] = lut[src[x]];
+    /* HD, and RF_BlitView has a fresh 3D frame waiting: present the view at its
+       own resolution filling the window, then the 320x200 chrome over it.
+
+       Without a fresh frame this is a menu, a fade or a cutscene presenting
+       `screen` directly, which wants the ordinary 4:3 path below.  RF_BlitView
+       leaves `screen` holding a composed 320x200 copy of the last frame for
+       exactly those callers. */
+    if (hdmode && hdviewfresh) {
+        hdviewfresh = 0;
+
+        expand(viewbuffer, hdw, hdh);
+        SDL_UpdateTexture(texture, NULL, convbuf, hdw * (int)sizeof(Uint32));
+
+        n = VGA_W * VGA_H;
+        for (i = 0; i < n; i++)
+            convbuf[i] = screen[i] ? lut[screen[i]] : 0;
+        SDL_UpdateTexture(overlay, NULL, convbuf, VGA_W * (int)sizeof(Uint32));
+
+        dst.x = 0.0f;
+        dst.y = 0.0f;
+        dst.w = (float)winw;
+        dst.h = (float)winh;
+
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        SDL_RenderClear(renderer);
+        SDL_RenderTexture(renderer, texture, NULL, &dst);
+        SDL_RenderTexture(renderer, overlay, NULL, &dst);
+        SDL_RenderPresent(renderer);
+
+        /* Now, and only now that the overlay has been read out of it, compose
+           a 320x200 copy of what is on screen back into `screen`: the view
+           nearest-downscaled in wherever the chrome left a hole.  Menus, fades,
+           the pause box and the quit box all snapshot `screen` and draw over
+           it, and are entitled to find the last visible frame there. */
+        for (y = 0; y < VGA_H; y++) {
+            byte *dest = screen + y * VGA_W;
+            byte *src  = viewbuffer + ((y * hdh) / VGA_H) * hdw;
+
+            for (x = 0; x < VGA_W; x++)
+                if (!dest[x])
+                    dest[x] = src[(x * hdw) / VGA_W];
+        }
+        return;
+    }
+
+    expand(screen, VGA_W, VGA_H);
+
+    /* The 320x200 texture only exists at that size in original mode; in HD the
+       main texture is the view buffer's size, so borrow the overlay. */
+    if (hdmode) {
+        SDL_UpdateTexture(overlay, NULL, convbuf, VGA_W * (int)sizeof(Uint32));
+        Sys_GetPresentRect((float)winw, (float)winh, &dst);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        SDL_RenderClear(renderer);
+        SDL_SetTextureBlendMode(overlay, SDL_BLENDMODE_NONE);
+        SDL_RenderTexture(renderer, overlay, NULL, &dst);
+        SDL_SetTextureBlendMode(overlay, SDL_BLENDMODE_BLEND);
+        SDL_RenderPresent(renderer);
+        return;
     }
 
     SDL_UpdateTexture(texture, NULL, convbuf, VGA_W * (int)sizeof(Uint32));
-
-    SDL_GetWindowSizeInPixels(window, &winw, &winh);
-
-    /* Largest 4:3 box that fits, centred. */
-    scale = (float)winw / ASPECT_W;
-    if ((float)winh / ASPECT_H < scale)
-        scale = (float)winh / ASPECT_H;
-
-    dst.w = ASPECT_W * scale;
-    dst.h = ASPECT_H * scale;
-    dst.x = ((float)winw - dst.w) * 0.5f;
-    dst.y = ((float)winh - dst.h) * 0.5f;
+    Sys_GetPresentRect((float)winw, (float)winh, &dst);
 
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     SDL_RenderTexture(renderer, texture, NULL, &dst);
     SDL_RenderPresent(renderer);
+}
+
+
+/* TEMPORARY */
+void VI_DumpPresented(char *path)
+{
+    SDL_Surface *s,*c; FILE *f; int y;
+    s=SDL_RenderReadPixels(renderer,NULL); if(!s) return;
+    f=fopen(path,"wb");
+    if(f){ c=SDL_ConvertSurface(s,SDL_PIXELFORMAT_RGB24);
+      if(c){ fprintf(f,"P6\n%d %d\n255\n",c->w,c->h);
+        for(y=0;y<c->h;y++) fwrite((byte*)c->pixels+(size_t)y*c->pitch,3,c->w,f);
+        SDL_DestroySurface(c);} fclose(f); }
+    SDL_DestroySurface(s);
 }
 
 
@@ -209,6 +472,7 @@ void VI_ResetPalette(void)
 void Sys_VideoShutdown(void)
 {
     if (texture)  { SDL_DestroyTexture(texture);   texture = NULL; }
+    if (overlay)  { SDL_DestroyTexture(overlay);   overlay = NULL; }
     if (renderer) { SDL_DestroyRenderer(renderer); renderer = NULL; }
     if (window)   { SDL_DestroyWindow(window);     window = NULL; }
     if (convbuf)  { free(convbuf); convbuf = NULL; }

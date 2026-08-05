@@ -39,6 +39,8 @@ void Sys_HandleMouseButtonDown(float x, float y);
 void Sys_VideoShutdown(void);
 void Sys_SoundShutdown(void);
 
+extern SoundCard SC;
+
 extern int  my_argc;
 extern char **my_argv;
 
@@ -59,12 +61,13 @@ static void handle_event(const SDL_Event *ev)
         /* Cmd-Q, since macOS users will reach for it before Alt-Q. */
         if (ev->key.key == SDLK_Q && (ev->key.mod & SDL_KMOD_GUI))
             quitgame = true;
-        /* Cmd-F / F11 for fullscreen. */
+        /* Cmd-F / F11 for fullscreen.  Goes through SC and VI_SetFullscreen so
+           the shortcut and the Display menu row cannot end up disagreeing, and
+           so the choice survives into the next run. */
         if ((ev->key.key == SDLK_F && (ev->key.mod & SDL_KMOD_GUI)) ||
             ev->key.key == SDLK_F11) {
-            SDL_Window *w = SDL_GetWindowFromID(ev->key.windowID);
-            bool full = (SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN) != 0;
-            SDL_SetWindowFullscreen(w, !full);
+            SC.fullscreen = !VI_GetFullscreen();
+            VI_SetFullscreen(SC.fullscreen);
         }
         /* Feed lastascii/newascii the way the DOS keyboard ISR did, so Esc
            and Enter produce characters and can skip the intro. */
@@ -76,6 +79,19 @@ static void handle_event(const SDL_Event *ev)
 
     case SDL_EVENT_TEXT_INPUT:
         Sys_HandleTextInput(ev->text.text);
+        break;
+
+    /* The HD buffer's shape is derived from the window's pixel size, so it has
+       to be re-derived when that changes -- a fullscreen transition settling,
+       or the user resizing.  Cheap and idempotent; it rebuilds the projection
+       tables and the two textures. */
+    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+        /* Only flag it.  Events are pumped from TimeUpdate, which runs in the
+           middle of PlayLoop -- rebuilding here would destroy and recreate both
+           textures and re-point viewylookup between the render and the present,
+           so the frame would be composed from two different view sizes. */
+        if (hdmode)
+            hdresizepending = 1;
         break;
 
     case SDL_EVENT_MOUSE_MOTION:

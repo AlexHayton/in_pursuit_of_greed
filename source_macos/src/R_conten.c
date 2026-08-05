@@ -50,9 +50,7 @@ vertex_t *TransformPoint(fixed_t x, fixed_t y)
  vertex_t *point;
 
  point=vertexlist_p++;
-#ifdef VALIDATE
  if (point>=&vertexlist[MAXVISVERTEXES]) MS_Error("TransformPoint: Vertexlist overflow");
-#endif
  trx=x-viewx;
  try=y-viewy;
  point->tx=FIXEDMUL(try, viewcos)+FIXEDMUL(trx, viewsin);
@@ -60,7 +58,7 @@ vertex_t *TransformPoint(fixed_t x, fixed_t y)
  if (point->tz>=MINZ)
   {
    scale=FIXEDDIV(SCALE,point->tz);
-   point->px=CENTERX+(FIXEDMUL(point->tx, scale)>>FRACBITS);
+   point->px=CENTERX+ProjectOffset(point->tx, scale);
    }
  return point;
  }
@@ -118,7 +116,7 @@ void RenderDoor(void)
  int       texture;        // 0-63 post number
  int       x, x1, x2;      // collumn and ranges
  span_t    *span_p;
- unsigned  span;
+ spantag_t  span;
  fixed_t   distance, absdistance, position;
  int       baseangle;
  fixed_t   textureadjust;  // the amount the texture p1ane is shifted
@@ -128,13 +126,18 @@ void RenderDoor(void)
 
  // scan the doorlist for matching tilex/tiley
  // this only happens a couple times / frame max, so it's not a big deal
+ /* last_p was computed here and then never used -- the scan ran with no bound
+    at all, so a tile flagged as a door with no matching entry walks off the end
+    of doorlist forever.  Nothing in a shipped map does that, but nothing stops
+    it either. */
  last_p=&doorlist[numdoors];
- for (door_p=doorlist;;door_p++)
+ for (door_p=doorlist; door_p<last_p; door_p++)
   {
    if (door_p->transparent)
     MS_Error("Door transparent");
    if (door_p->tilex==tilex && door_p->tiley==tiley) break;
    }
+ if (door_p==last_p) return;    /* no door on this tile; draw nothing */
  // transform both endpoints of the door
  // p1 is the anchored point, p2 is the moveable point
  tx=tilex<<(TILESHIFT+FRACBITS);
@@ -231,7 +234,7 @@ void RenderDoor(void)
    sp_source=postindex[texture];
 
    // post the span in the draw list
-   span=(pointz<<ZTOFRAC)&ZMASK;
+   span=((spantag_t)pointz<<ZTOFRAC)&ZMASK;
    spansx[numspans]=x;
    span|=numspans;
    spantags[numspans]=span;
@@ -245,9 +248,7 @@ void RenderDoor(void)
    span_p->shadow=wallshadow;
 
    numspans++;
-#ifdef VALIDATE
    if (numspans>=MAXSPANS) MS_Error("MAXSPANS exceeded, RenderDoor (%i>=%i)",numspans,MAXSPANS);
-#endif
    }
 
 part2:
@@ -344,7 +345,7 @@ part2:
    sp_source=postindex[texture];
 
    // post the span in the draw list
-   span=(pointz<<ZTOFRAC)&ZMASK;
+   span=((spantag_t)pointz<<ZTOFRAC)&ZMASK;
    spansx[numspans]=x;
    span|=numspans;
    spantags[numspans]=span;
@@ -358,9 +359,7 @@ part2:
    span_p->shadow=wallshadow;
 
    numspans++;
-#ifdef VALIDATE
    if (numspans>=MAXSPANS) MS_Error("MAXSPANS exceeded, RenderDoor (%i>=%i)",numspans,MAXSPANS);
-#endif
    }
 
 
@@ -446,7 +445,7 @@ part3:
    sp_source=postindex[texture];
 
    // post the span in the draw list
-   span=(pointz<<ZTOFRAC)&ZMASK;
+   span=((spantag_t)pointz<<ZTOFRAC)&ZMASK;
    spansx[numspans]=x;
    span|=numspans;
    spantags[numspans]=span;
@@ -460,9 +459,7 @@ part3:
    span_p->shadow=wallshadow;
 
    numspans++;
-#ifdef VALIDATE
    if (numspans>=MAXSPANS) MS_Error("MAXSPANS exceeded, RenderDoor (%i>=%i)",numspans,MAXSPANS);
-#endif
    }
 
  }
@@ -476,7 +473,7 @@ void RenderSprites()
  scaleobj_t *sprite;
  fixed_t    deltax, deltay, pointx, pointz, gxt, gyt;
  int        picnum;
- unsigned   span;
+ spantag_t   span;
  span_t     *span_p;
  byte       animationGraphic, animationMax, animationDelay;
  int        mapx, mapy, mapspot;
@@ -530,7 +527,7 @@ void RenderSprites()
    // transform the point
    pointx=FIXEDMUL(deltax, viewsin) + FIXEDMUL(deltay, viewcos);
    // post the span event
-   span=(pointz<<ZTOFRAC)&ZMASK;
+   span=((spantag_t)pointz<<ZTOFRAC)&ZMASK;
    span|=numspans;
    spantags[numspans]=span;
    span_p=&spans[numspans];
@@ -547,8 +544,6 @@ void RenderSprites()
    if (sprite->specialtype==st_noclip) span_p->light=-1000;
     else span_p->light=(maplights[mapspot]<<2) + reallight[mapspot];
    numspans++;
-#ifdef VALIDATE
    if (numspans>=MAXSPANS) MS_Error("MAXSPANS exceeded, RenderSprites (%i>=%i)",numspans,MAXSPANS);
-#endif
    }
  }

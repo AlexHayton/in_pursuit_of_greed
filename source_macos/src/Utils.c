@@ -397,6 +397,36 @@ void LoadTextures(void)
  }
 
 
+/* Count floor/ceiling tiles the renderer cannot draw a flat for.
+
+   Only 1..numflats-1 are real textures: 0 is the `startflats` marker and
+   numflats is `endflats`, both zero length.  Flat 0 turns out to be simply how
+   the maps encode a solid tile -- 3213 of 4096 on the first level -- so this is
+   normal data, not corruption, and the count is only interesting to a developer
+   watching it change.  What matters is that RenderTileEnds no longer walks into
+   lumpmain[flatlump+0] and dereferences NULL when a wide field of view reaches
+   one of those tiles.
+
+   Anything at or past numflats would be genuinely out of range; it is folded
+   into the same count because the handling is identical. */
+void CheckMapFlats(void)
+{
+ int i, badfloor=0, badceiling=0, firstbad=-1;
+
+ for(i=0;i<MAPROWS*MAPCOLS;i++)
+  {
+   if (floorpic[i]<1 || floorpic[i]>=numflats)
+    { badfloor++; if (firstbad<0) firstbad=i; }
+   if (ceilingpic[i]<1 || ceilingpic[i]>=numflats)
+    { badceiling++; if (firstbad<0) firstbad=i; }
+   }
+ if (debugmode && (badfloor || badceiling))
+  printf("Map:\t%d floor and %d ceiling tiles carry no flat "
+         "(first at mapspot %d); those surfaces are skipped\n",
+         badfloor,badceiling,firstbad);
+ }
+
+
 void LoadNewMap(int lump)
 {
  int  i, j, f;
@@ -507,6 +537,7 @@ void LoadNewMap(int lump)
  ActivateSlopes();
  UpdateWait();
  LoadTextures();
+ CheckMapFlats();
  }
 
 
@@ -728,6 +759,12 @@ void ChangeViewSize(byte MakeLarger)
 {
  int lastviewsize;
 
+ /* In HD the view size is the render resolution, chosen by VI_ApplyRenderMode
+    from the display, and the viewSizes[] table does not apply.  newplayer walks
+    this function up and down four times to force the tables to rebuild, which
+    would otherwise drop the view straight back to 320x200. */
+ if (hdmode) return;
+
  if (SC.vrhelmet==1)
   {
    if (MakeLarger && viewSizes[(currentViewSize+1)*2]!=320)
@@ -757,6 +794,8 @@ void ChangeViewSize(byte MakeLarger)
    windowTop=viewLoc[currentViewSize*2+1];
    windowSize=windowHeight*windowWidth;
    viewLocation=(intptr_t)screen+windowTop*320+windowLeft;
+   mainViewWidth=windowWidth;
+   mainViewHeight=windowHeight;
    SetViewSize(windowWidth,windowHeight);
    ResetScalePostWidth(windowWidth);
    InitWalls();
@@ -1415,6 +1454,52 @@ void selectsong(int songmap)
  }
 
 
+static void BriefingWaitKey(void)
+/* One press, one page.  Used by the mission briefings and the end-game text
+   and credits screens, which all wait for the player the same way.
+
+   Every one of those pages used to end in `for(;;){Wait(10); if (newascii)
+   break;}`.  Nothing there consumes the key, so the auto-repeat kept re-latching
+   newascii and a single held key ran the pages together -- measurably, one press
+   spent all six pages of the map 0 briefing.  The briefings had it worse than
+   the end-game screens, because they clear newascii *before* the page fades in
+   rather than after, so the repeat had the whole fade to latch in as well.
+
+   Same debounce as MenuCommand's Enter and Esc: nothing counts until the keys
+   that can produce a character have been seen released.  Modifiers are skipped
+   because they have no ASCIINames entry and so cannot set newascii; waiting on
+   them would hang the screen for anyone resting a finger on shift.
+
+   Esc is exempt.  MissionBriefing follows this with `if (lastascii==27) goto
+   end`, so debouncing Esc would cost a second press to leave a briefing the
+   player has already said they want out of -- and it cannot run pages together,
+   because it leaves MissionBriefing outright.  Same `newascii && lastascii==27`
+   test the engine's other skippable screens use.  The end-game callers clear
+   newascii immediately before calling, so a stale Esc cannot reach this.
+
+   quitgame likewise returns straight away, and every caller tests it after.
+   This is one of the few loops in the engine that waits on nothing but input,
+   so it cannot be left to Wait's own quitgame check -- with the delay abandoned
+   it would simply spin here forever instead. */
+{
+ int i;
+
+ if (quitgame || (newascii && lastascii==27)) return;
+
+ for (;;)
+  {
+   for (i=0;i<NUMCODES;i++)
+    if (keyboard[i] && ASCIINames[i]) break;
+   if (i==NUMCODES) break;
+   if (quitgame || (newascii && lastascii==27)) return;
+   Wait(1);
+   }
+
+ newascii=false;
+ while (!newascii && !quitgame) Wait(1);
+ }
+
+
 void EndGame1(void)
 {
  char name[64];
@@ -1454,44 +1539,32 @@ void EndGame1(void)
     "\n\n\n\n\nTO BE CONTINUED...\n");
    }
  newascii=false;
- for (;;)
-  {
-   Wait(10);
-   if (newascii) break;
-   }
+ BriefingWaitKey();
+ if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
  memset(screen,0,64000);
 
  loadscreen("SOFTLOGO");
  VI_FadeIn(0,256,colors,48);
  newascii=false;
- for (;;)
-  {
-   Wait(10);
-   if (newascii) break;
-   }
+ BriefingWaitKey();
+ if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
  memset(screen,0,64000);
 
  loadscreen("CREDITS1");
  VI_FadeIn(0,256,colors,48);
  newascii=false;
- for (;;)
-  {
-   Wait(10);
-   if (newascii) break;
-   }
+ BriefingWaitKey();
+ if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
  memset(screen,0,64000);
 
  loadscreen("CREDITS2");
  VI_FadeIn(0,256,colors,48);
  newascii=false;
- for (;;)
-  {
-   Wait(10);
-   if (newascii) break;
-   }
+ BriefingWaitKey();
+ if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
  memset(screen,0,64000);
 
@@ -1499,11 +1572,8 @@ void EndGame1(void)
  loadscreen("CREDITS3");
  VI_FadeIn(0,256,colors,48);
  newascii=false;
- for (;;)
-  {
-   Wait(10);
-   if (newascii) break;
-   }
+ BriefingWaitKey();
+ if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
  memset(screen,0,64000);
 #endif
@@ -1558,55 +1628,40 @@ void EndGame2(void)
     "\n\n\n\n\nTO BE CONTINUED...\n");
    }
  newascii=false;
- for (;;)
-  {
-   Wait(10);
-   if (newascii) break;
-   }
+ BriefingWaitKey();
+ if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
  memset(screen,0,64000);
 
  loadscreen("SOFTLOGO");
  VI_FadeIn(0,256,colors,48);
  newascii=false;
- for (;;)
-  {
-   Wait(10);
-   if (newascii) break;
-   }
+ BriefingWaitKey();
+ if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
  memset(screen,0,64000);
 
  loadscreen("CREDITS1");
  VI_FadeIn(0,256,colors,48);
  newascii=false;
- for (;;)
-  {
-   Wait(10);
-   if (newascii) break;
-   }
+ BriefingWaitKey();
+ if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
  memset(screen,0,64000);
 
  loadscreen("CREDITS2");
  VI_FadeIn(0,256,colors,48);
  newascii=false;
- for (;;)
-  {
-   Wait(10);
-   if (newascii) break;
-   }
+ BriefingWaitKey();
+ if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
  memset(screen,0,64000);
 
  loadscreen("CREDITS3");
  VI_FadeIn(0,256,colors,48);
  newascii=false;
- for (;;)
-  {
-   Wait(10);
-   if (newascii) break;
-   }
+ BriefingWaitKey();
+ if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
  memset(screen,0,64000);
 
@@ -1692,55 +1747,40 @@ void EndGame3(void)
 #endif
    }
  newascii=false;
- for (;;)
-  {
-   Wait(10);
-   if (newascii) break;
-   }
+ BriefingWaitKey();
+ if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
  memset(screen,0,64000);
 
  loadscreen("SOFTLOGO");
  VI_FadeIn(0,256,colors,48);
  newascii=false;
- for (;;)
-  {
-   Wait(10);
-   if (newascii) break;
-   }
+ BriefingWaitKey();
+ if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
  memset(screen,0,64000);
 
  loadscreen("CREDITS1");
  VI_FadeIn(0,256,colors,48);
  newascii=false;
- for (;;)
-  {
-   Wait(10);
-   if (newascii) break;
-   }
+ BriefingWaitKey();
+ if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
  memset(screen,0,64000);
 
  loadscreen("CREDITS2");
  VI_FadeIn(0,256,colors,48);
  newascii=false;
- for (;;)
-  {
-   Wait(10);
-   if (newascii) break;
-   }
+ BriefingWaitKey();
+ if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
  memset(screen,0,64000);
 
  loadscreen("CREDITS3");
  VI_FadeIn(0,256,colors,48);
  newascii=false;
- for (;;)
-  {
-   Wait(10);
-   if (newascii) break;
-   }
+ BriefingWaitKey();
+ if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
  memset(screen,0,64000);
 
@@ -2060,6 +2100,11 @@ static void BriefingFadeInPage(int texty,char *text)
  VI_GetPalette(basep);
  for (i=1;i<=steps;i++)
   {
+   /* A key pressed during the ramp snaps it to the end.  Jumping i rather than
+      breaking means the last step still runs, so the page is left in exactly
+      the state a completed fade leaves it in.  The press is not spent here --
+      BriefingWaitKey still wants one of its own to turn the page. */
+   if (newascii) i=steps;
    fontbasecolor=(i*9)/steps;
    if (fontbasecolor>8) fontbasecolor=8;
    printy=texty;
@@ -2110,17 +2155,14 @@ void MissionBriefing(int map)
       painted with colour index i -- which is not in the DOS source and wiped
       the briefing screen the player is meant to be reading. */
 
-   for(;;)
-    {
-     Wait(10);
-     if (newascii) break;
-     }
-   if (lastascii==27) goto end;
+   BriefingWaitKey();
+   if (quitgame || lastascii==27) goto end;
 
    loadscreen("BRIEF3");
    newascii=false;
    for(fontbasecolor=0;fontbasecolor<9;++fontbasecolor)
     {
+     if (newascii) fontbasecolor=8;   /* snap the ramp -- see BriefingFadeInPage */
      printy=149;
      FN_PrintCentered(
       "A MENUING SYSTEM HAS ALSO BEEN INSTALLED ALLOWING YOU TO\n"
@@ -2129,12 +2171,8 @@ void MissionBriefing(int map)
       "SEE THINGS COMING WHILE YOU'RE ADJUSTING YOUR SETTINGS.");
      Wait(3);
      }
-   for(;;)
-    {
-     Wait(10);
-     if (newascii) break;
-     }
-   if (lastascii==27) goto end;
+   BriefingWaitKey();
+   if (quitgame || lastascii==27) goto end;
    VI_FadeOut(0,256,0,0,0,64);
 
 
@@ -2149,12 +2187,8 @@ void MissionBriefing(int map)
       "SUCH AN ENIGMATIC ENERGY SOURCE IS OF OBVIOUS INTEREST TO A.V.C.\n"
       "RESEARCH, SO ACQUIRING IT UNDAMAGED IS ESSENTIAL.\n"
       "YOUR ENTRY POINT WILL BE AT THE BASE OF THE COMPLEX.\n");
-   for(;;)
-    {
-     Wait(10);
-     if (newascii) break;
-     }
-   if (lastascii==27) goto end;
+   BriefingWaitKey();
+   if (quitgame || lastascii==27) goto end;
    VI_FadeOut(0,256,0,0,0,64);
 
    loadscreen("BRIEF2");
@@ -2167,17 +2201,14 @@ void MissionBriefing(int map)
       "PLACED OBJECTS TAKEN FROM THE SHIP'S INVENTORY. EXPECT\n"
       "NON-COOPERATIVES (NOPS) FROM OTHER PARTS OF THE COLONY TO BE\n"
       "BROUGHT IN AT REGULAR INTERVALS TO REPLACE CASUALTIES OF THE HUNT.\n");
-   for(;;)
-    {
-     Wait(10);
-     if (newascii) break;
-     }
-   if (lastascii==27) goto end;
+   BriefingWaitKey();
+   if (quitgame || lastascii==27) goto end;
 
    loadscreen("BRIEF2");
    newascii=false;
    for(fontbasecolor=0;fontbasecolor<9;++fontbasecolor)
     {
+     if (newascii) fontbasecolor=8;   /* snap the ramp -- see BriefingFadeInPage */
      printy=139;
      FN_PrintCentered(
       "THIS MISSION WILL BEGIN IN THE INMATE PROCESSING AREA, WHERE\n"
@@ -2186,17 +2217,14 @@ void MissionBriefing(int map)
       "SECONDARY GOALS ARE PHOSPHER PELLETS AND DELOUSING KITS.\n");
      Wait(3);
      }
-   for(;;)
-    {
-     Wait(10);
-     if (newascii) break;
-     }
-   if (lastascii==27) goto end;
+   BriefingWaitKey();
+   if (quitgame || lastascii==27) goto end;
 
    loadscreen("BRIEF2");
    newascii=false;
    for(fontbasecolor=0;fontbasecolor<9;++fontbasecolor)
     {
+     if (newascii) fontbasecolor=8;   /* snap the ramp -- see BriefingFadeInPage */
      printy=139;
      FN_PrintCentered(
       "YOU WILL BE MONITORED.  POINTS WILL BE AWARDED FOR PRIMARY,\n"
@@ -2207,12 +2235,8 @@ void MissionBriefing(int map)
       "TRANSLATE YOU TO THE NEXT AREA OF THE BASE.\n \nGOOD LUCK.");
      Wait(3);
      }
-   for(;;)
-    {
-     Wait(10);
-     if (newascii) break;
-     }
-   if (lastascii==27) goto end;
+   BriefingWaitKey();
+   if (quitgame || lastascii==27) goto end;
    }
 #ifdef GAME1
  else if (map<8)
@@ -2272,12 +2296,8 @@ void MissionBriefing(int map)
        "THIS IS THE CITY-TEMPLE OF RISTANAK, ANCIENT HOME TO THE\n"
        "PRIESTHOOD OF YRKTAREL.  THE PRIESTHOOD HAS WORSHIPPED THEIR\n"
        "PAGAN DEITY FOR CENTURIES IN PEACE... UNTIL NOW.\n");
-     for(;;)
-      {
-       Wait(10);
-       if (newascii) break;
-       }
-     if (lastascii==27) goto end;
+     BriefingWaitKey();
+     if (quitgame || lastascii==27) goto end;
      VI_FadeOut(0,256,0,0,0,64);
 
      loadscreen("BRIEF5");
@@ -2291,12 +2311,8 @@ void MissionBriefing(int map)
        "THE A.V.C. BELIEVES THE ENCODE TO CONTAIN FORGOTTEN\n"
        "TECHNOLOGIES WHICH WOULD BE PRICELESS ON THE BLACK MARKET.\n"
        "IT IS YOUR MISSION TO ACQUIRE IT.\n");
-     for(;;)
-      {
-       Wait(10);
-       if (newascii) break;
-       }
-     if (lastascii==27) goto end;
+     BriefingWaitKey();
+     if (quitgame || lastascii==27) goto end;
      VI_FadeOut(0,256,0,0,0,64);
 
      }
@@ -2357,12 +2373,8 @@ void MissionBriefing(int map)
        "THEN MOUNTED TO A TROJAN GATE JUMP POINT AND TO THIS DAY IT\n"
        "REMAINS AS A WAY POINT BETWEEN THE RIM WORLDS AND THE CORE\n"
        "QUARTER, AS WELL AS HOUSING MILITARY MIGHT IN THIS SECTOR.\n");
-     for(;;)
-      {
-       Wait(10);
-       if (newascii) break;
-       }
-     if (lastascii==27) goto end;
+     BriefingWaitKey();
+     if (quitgame || lastascii==27) goto end;
      VI_FadeOut(0,256,0,0,0,64);
 
      loadscreen("BRIEF7");
@@ -2377,12 +2389,8 @@ void MissionBriefing(int map)
        "AND SUBSEQUENT ETERNAL RULE OF THE CORPS.  OVER 30 ATTEMPTS\n"
        "HAVE BEEN MADE TO WREST THE SIGIL FROM THE CHANCELLOR'S GRASP.\n"
        "THEY ALL FAILED.\n");
-     for(;;)
-      {
-       Wait(10);
-       if (newascii) break;
-       }
-     if (lastascii==27) goto end;
+     BriefingWaitKey();
+     if (quitgame || lastascii==27) goto end;
      VI_FadeOut(0,256,0,0,0,64);
 
      }
@@ -2431,6 +2439,7 @@ void MissionBriefing(int map)
    VI_GetPalette(basep);
    for (i=1;i<=64;i++)
     {
+     if (newascii) i=64;   /* snap the ramp -- see BriefingFadeInPage */
      fontbasecolor=(i*9)/64;
      if (fontbasecolor>8) fontbasecolor=8;
      printy=85;
@@ -2441,11 +2450,8 @@ void MissionBriefing(int map)
      Wait(1);
      }
    VI_SetPalette(colors);
-   for(;;)
-    {
-     Wait(10);
-     if (newascii) break;
-     }
+   BriefingWaitKey();
+   if (quitgame) goto end;
    VI_FadeOut(0,256,0,0,0,64);
    }
 

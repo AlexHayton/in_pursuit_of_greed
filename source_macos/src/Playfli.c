@@ -148,7 +148,12 @@ void fli_linecompression(void)
  y2=getword();               // number of lines to change
  for (y2+=y;y<y2;y++)
   {
-   line=viewylookup[y];
+   /* An explicit 320 stride, not viewylookup: the FLI decoder treats viewbuffer
+      as a packed 320x200 scratch frame -- the whole-frame reader above walks it
+      linearly and the flip below memcpy's 64000 bytes of it straight to
+      `screen`.  viewylookup rows are windowWidth apart, which is only 320 while
+      the view happens to be full width. */
+   line=viewbuffer+y*SCREENWIDTH;
    packets=getbyte();
    for (p=0;p<packets;p++)
     {
@@ -242,7 +247,7 @@ bool playfli(char *fname,longint offset)
   MS_Error("PlayFLI: File Read Error: %s",fname);
  currentfliframe=0;
  delay=timecount;
- while (currentfliframe++<header.nframes && !newascii) // newascii=user break
+ while (currentfliframe++<header.nframes && !newascii && !quitgame) // newascii=user break
   {
    delay+=header.speed;                   // set timer
    fli_readframe(f);
@@ -251,7 +256,10 @@ bool playfli(char *fname,longint offset)
       loop's back.  With a main-thread tick that is an unconditional hang, and
       it also has to pump for newascii above to ever break the outer loop. */
    while (!CheckTime(timecount,delay))
-    Sys_PumpFrame();
+    {
+     Sys_PumpFrame();
+     if (quitgame) break;
+     }
    memcpy(screen,viewbuffer,64000);       // copy
    }
  fclose(f);

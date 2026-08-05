@@ -50,10 +50,16 @@ static int DVolume[MAXSOUNDDIST];   /* 0..63 by squared distance */
    garbage into the key bindings and volume settings.
 
    A magic + version + size header makes the mismatch explicit: anything that
-   doesn't match is rejected and the built-in defaults are used instead. */
+   doesn't match is rejected and the built-in defaults are used instead.
+
+   Version 2 appended the display settings to SoundCard.  Requiring an exact
+   structsize match would have thrown away every version 1 file -- volumes and
+   key bindings included -- for the sake of two new ints, so a shorter struct
+   from an older version is read as the prefix it is.  The caller must have
+   already set the tail to its defaults; see InitSound. */
 
 #define SETUP_MAGIC   0x44454247UL   /* 'GBED' little-endian */
-#define SETUP_VERSION 1
+#define SETUP_VERSION 2
 
 typedef struct {
     unsigned int magic;
@@ -74,12 +80,12 @@ int LoadSetup(SoundCard *SC, char *Filename)
         return 1;
     }
     if (hdr.magic != SETUP_MAGIC ||
-        hdr.version != SETUP_VERSION ||
-        hdr.structsize != (unsigned int)sizeof(SoundCard)) {
+        hdr.version > SETUP_VERSION ||
+        hdr.structsize > (unsigned int)sizeof(SoundCard)) {
         close(Handle);
         return 1;
     }
-    if (read(Handle,SC,sizeof(SoundCard)) != (int)sizeof(SoundCard)) {
+    if (read(Handle,SC,hdr.structsize) != (int)hdr.structsize) {
         close(Handle);
         return 1;
     }
@@ -142,6 +148,11 @@ void InitSound(void)
  MusicPresent=false;
  autodetect=false;
  noconfig=false;
+ /* Set before the load, not in the not-found branch below: a version 1
+    SETUP.CFG stops short of these two fields, and LoadSetup leaves whatever
+    is already there rather than inventing values it cannot know. */
+ SC.fullscreen=1;
+ SC.hdmode=1;
  if (LoadSetup(&SC,"SETUP.CFG"))     /* load config file */
   {
    noconfig=true;
@@ -207,6 +218,10 @@ void InitSound(void)
      }
    else printf("Success\n");
    }
+
+ /* The screen size slider is gone from the options menu, so nothing can undo a
+    non-zero value carried in from an older SETUP.CFG.  Full view, always. */
+ SC.screensize=0;
 
  MusicSwapChannels=SC.inversepan;
 

@@ -22,8 +22,18 @@
 
 /**** CONSTANTS ****/
 
-#define MAX_VIEW_WIDTH		320
-#define MAX_VIEW_HEIGHT		200
+/* The ceiling the view scratch arrays are sized to, NOT the view size.  The
+   engine's rasteriser is resolution-independent -- SetViewSize recomputes every
+   derived table -- but viewbuffer, viewylookup, xslope/yslope and the per-column
+   angle tables are static arrays, so this is the hard limit.
+
+   320x200 until the HD mode; 1920x1200 covers the ~1.3 Mpixel HD cap at any
+   display aspect.  Cost is viewbuffer at 2.3 MB, zerofill.
+
+   Nothing may use these as a stride: the row pitch of viewbuffer is
+   windowWidth, which is the *current* view width and usually smaller. */
+#define MAX_VIEW_WIDTH		1920
+#define MAX_VIEW_HEIGHT		1200
 #define INIT_VIEW_WIDTH		320
 #define INIT_VIEW_HEIGHT	200
 #define VIEW_LEFT			0
@@ -78,8 +88,14 @@ typedef int fixed_t;
 #define FRACTILESHIFT   (FRACBITS+TILESHIFT)
 
 #define BACKDROPHEIGHT  100
+/* How far looking up and down may scroll the view, in view rows.  60 rows of a
+   200-row view is 30% of it; as a flat count it becomes a few percent of an HD
+   view, which makes looking up and down nearly useless.  VIEWSCROLL keeps the
+   fraction instead, and is exactly 60 at 200 rows. */
 #define MAXSCROLL       60
-#define MAXSCROLL2      120
+#define VIEWSCROLL(h)   (((h)*MAXSCROLL)/INIT_VIEW_HEIGHT)
+/* Slack the yslope/mapcache arrays need above and below the view. */
+#define MAXSCROLL2      (2*VIEWSCROLL(MAX_VIEW_HEIGHT))
 
 // flags in mapflags
 #define FL_DOOR         128
@@ -235,6 +251,30 @@ extern intptr_t viewLocation;  /* pointer-width; see R_public.c */
 extern fixed_t mapcache_height[MAX_VIEW_HEIGHT+MAXSCROLL2];
 extern int     frameon, framevalid[MAPROWS*MAPCOLS];
 extern fixed_t CENTERY, CENTERX, SCALE, ISCALE;
+extern int     hdmode;         /* active render mode; see R_public.c */
+extern int     viewproj;       /* projection scale in pixels, set by SetViewSize */
+extern int     viewscroll;     /* look up/down range in view rows */
+extern int     viewclipy;      /* ceiling-polygon reject bound; see R_public.c */
+extern int     viewminscale;   /* near cutoff on the texel step; see R_public.c */
+
+/* Texels per screen row for a post at depth z.
+
+   The engine spells this FIXEDMUL(z,ISCALE) with ISCALE = FRACUNIT/proj, an
+   integer division whose rounding error grows with the projection: 0.15% at
+   the original 160, but 0.45% at an HD scale of 659.  That error is a texture
+   step, so it accumulates down the post and varies from column to column with
+   z -- which reads as a zigzag along horizontal features on near walls.
+   Dividing directly is exact to 1/65536.  Original mode keeps the historical
+   expression so its output is unchanged. */
+#define TEXELSTEP(z)   (hdmode ? (fixed_t)((z)/viewproj) : FIXEDMUL((z),ISCALE))
+/* Target for the 2D chrome; aliases the view buffer or `screen`.  See
+   R_public.c.  Anything drawing 320x200-authored artwork uses these, never
+   viewylookup/windowWidth directly. */
+extern byte    **hudylookup;
+extern int     hudWidth, hudHeight;
+extern int     mainViewWidth, mainViewHeight;
+extern int     hdviewfresh;
+extern int     hdresizepending;
 extern bool debugmode;
 
 
