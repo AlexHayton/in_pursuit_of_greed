@@ -8,64 +8,19 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
-include(cmake/deps.cmake)
-
-# ---- Engine + platform sources ----------------------------------------------
-
-file(GLOB GREED_ENGINE_SRC CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
-
-set(GREED_PLATFORM_SRC
-    platform/sys_main.c
-    platform/sys_video.c
-    platform/sys_input.c
-    platform/sys_sound.c
-    platform/sys_files.c
-)
+# The engine, the SDL platform layer and both dependencies live in
+# ../source_shared and are identical to the ones source_win64 builds.  Only the
+# bundle below is macOS-specific.
+include(../source_shared/cmake/deps.cmake)
+include(../source_shared/cmake/engine.cmake)
 
 # Derived from greed_cdrom/LOGO.PCX; regenerate with bundle/make_icon.py.
 set(GREED_ICON "${CMAKE_CURRENT_SOURCE_DIR}/bundle/Greed.icns")
 set_source_files_properties(${GREED_ICON} PROPERTIES
     MACOSX_PACKAGE_LOCATION "Resources")
 
-add_executable(greed MACOSX_BUNDLE
-    ${GREED_ENGINE_SRC} ${GREED_PLATFORM_SRC} ${GREED_ICON})
-
-target_include_directories(greed PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/platform
-    ${CMAKE_CURRENT_SOURCE_DIR}/platform/compat   # dos.h, conio.h, io.h, ...
-)
-
-# The 1996 sources predate C99: implicit int, implicit declarations, and
-# K&R-isms that a modern default standard rejects outright.
-set_target_properties(greed PROPERTIES
-    C_STANDARD 90
-    C_EXTENSIONS ON
-)
-
-target_compile_options(greed PRIVATE
-    -fno-strict-aliasing
-    # Every source #includes <STRING.H>, <DOS.H> and friends in caps.  The
-    # filesystem is case-insensitive so they resolve; silence the noise.
-    -Wno-nonportable-include-path
-    -Wno-parentheses
-    -Wno-deprecated-non-prototype
-    # These four are the LP64 hazards that actually corrupt memory in a port
-    # like this -- pointers truncated through int.  Never let them slide.
-    -Werror=int-conversion
-    -Werror=pointer-to-int-cast
-    -Werror=int-to-pointer-cast
-    -Werror=incompatible-pointer-types
-)
-
-# Force-include the compat shims so src/ stays a near-verbatim copy of the
-# Win32 sources.
-target_compile_options(greed PRIVATE
-    -include ${CMAKE_CURRENT_SOURCE_DIR}/platform/sys_compat.h
-)
-
-target_link_libraries(greed PRIVATE SDL3::SDL3-static libxmp::xmp_static)
-target_compile_definitions(greed PRIVATE HAVE_LIBXMP=1)
+add_executable(greed MACOSX_BUNDLE ${GREED_ICON})
+greed_add_engine_target(greed)
 
 # ---- Bundle ------------------------------------------------------------------
 

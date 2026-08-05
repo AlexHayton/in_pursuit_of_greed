@@ -23,6 +23,20 @@ include(FetchContent)
 set(GREED_SDL3_TAG   "release-3.4.14" CACHE STRING "SDL3 git tag to build against")
 set(GREED_LIBXMP_TAG "libxmp-4.7.2"   CACHE STRING "libxmp git tag to build against")
 
+# ---- C runtime --------------------------------------------------------------
+
+# Windows only, and it must be set before FetchContent_MakeAvailable or the
+# subprojects have already been configured with the default.  Static CRT so
+# Greed.exe runs on a machine with no Visual C++ redistributable, which is the
+# equivalent of the fully-static Greed.app on macOS.  SDL carries its own
+# switch for the same thing; without it SDL builds /MD and the link fails on
+# mismatched runtimes.
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+        CACHE STRING "" FORCE)
+    set(SDL_FORCE_STATIC_VCRT ON CACHE BOOL "" FORCE)
+endif()
+
 # ---- SDL3 -------------------------------------------------------------------
 
 set(SDL_SHARED       OFF CACHE BOOL "" FORCE)

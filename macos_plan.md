@@ -1,4 +1,10 @@
-# macOS port of *In Pursuit of Greed*
+# macOS (and Windows) port of *In Pursuit of Greed*
+
+> **The tree moved, 2026-08-05.** `src/` and `platform/` are no longer under `source_macos/` — they
+> are in **`source_shared/`**, along with `cmake/deps.cmake` and a new `cmake/engine.cmake`, and are
+> compiled unchanged by both ports. `source_macos/` keeps only the `.app` bundle; `source_win64/` is
+> the new Windows x64 build. Every file path in the sections below that reads `source_macos/src/...`
+> or `platform/...` now lives under `source_shared/`. See **Windows port** at the end.
 
 ## Status
 
@@ -977,3 +983,26 @@ intrusive doubly-linked sprite list mutated during iteration, and renderer hot l
 pointers (`R_spans.c:MapRow`) — makes it a 3–5× rewrite rather than a port, with no test suite to
 validate against. Doing the C port first yields the working reference build that a later Rust rewrite
 would need as its oracle.
+
+---
+
+# Windows port
+
+There is one, and it builds from these same sources — see **[`windows_plan.md`](windows_plan.md)**.
+
+The short version: `src/` and `platform/` moved to `source_shared/` and are compiled unchanged by
+both targets. The engine needed **no** Windows-specific changes at all, and the SDL3 platform layer
+needed nine `#ifdef` sites in 1,937 lines. Everything genuinely macOS-specific turned out to be in
+the build — `MACOSX_BUNDLE`, `Info.plist`, `.icns`, `codesign`, `Contents/Resources` — which is what
+`source_macos/CMakeLists.txt` now holds and nothing else.
+
+Two findings from that port are worth reading back into this one:
+
+- **`SDL_GetPrefPath` was already doing the portable thing.** The read-only-install problem
+  `sys_files.c` exists to solve is the same problem on both platforms, and the macOS solution needed
+  no adaptation.
+- **A path can be relative on one platform and absolute on the other.** The engine's forty
+  `A:\GREED\MOVIES\*.FLI` strings are relative on macOS — which is the only reason this port's
+  resolver ever saw them and normalised them. On Windows they parse as valid absolute paths and
+  bypassed the fix entirely. Worth remembering before adding any other short-circuit to
+  `sys_files.c`.

@@ -5,8 +5,13 @@
 build/
 build-*/
 
-# Debug symbol bundles
+# Debug symbols: macOS bundles, MSVC databases and incremental-link state
 *.dSYM/
+*.pdb
+*.ilk
+
+# Framebuffer dumps from GREED_SHOT / GREED_REPRO
+*.ppm
 
 # Editor / tooling
 compile_commands.json

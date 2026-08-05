@@ -23,7 +23,7 @@ The result is `build/Greed.app`, a self-contained bundle: both dependencies are
 linked statically, so `otool -L` shows nothing but system frameworks and the
 app runs on a clean macOS install.
 
-To upgrade a dependency, bump its tag in `cmake/deps.cmake` and reconfigure.
+To upgrade a dependency, bump its tag in `../source_shared/cmake/deps.cmake` and reconfigure.
 
 ## Running
 
@@ -119,7 +119,7 @@ layer. The two build dependencies ship their notices in
 
 - **SDL3** — zlib licence.
 - **libxmp** — MIT, as of 4.5.0. It was LGPL-2.1-or-later before that, which is
-  why `cmake/deps.cmake` warns against pinning it back below 4.5.0 without also
+  why `../source_shared/cmake/deps.cmake` warns against pinning it back below 4.5.0 without also
   switching it to a shared library.
 
 The build is ad-hoc code-signed, which is enough for Gatekeeper to run it

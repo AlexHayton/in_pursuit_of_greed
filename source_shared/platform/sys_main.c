@@ -58,14 +58,22 @@ static void handle_event(const SDL_Event *ev)
         break;
 
     case SDL_EVENT_KEY_DOWN:
-        /* Cmd-Q, since macOS users will reach for it before Alt-Q. */
+        /* Cmd-Q and Cmd-F, since macOS users will reach for those before Alt-Q
+           and F11.  Not on Windows: SDL_KMOD_GUI is the Windows key there, and
+           Win+Q is the OS search shortcut -- binding quit to it would be a
+           surprise.  Alt-F4 already arrives as SDL_EVENT_QUIT. */
+#ifdef SDL_PLATFORM_APPLE
         if (ev->key.key == SDLK_Q && (ev->key.mod & SDL_KMOD_GUI))
             quitgame = true;
-        /* Cmd-F / F11 for fullscreen.  Goes through SC and VI_SetFullscreen so
-           the shortcut and the Display menu row cannot end up disagreeing, and
-           so the choice survives into the next run. */
-        if ((ev->key.key == SDLK_F && (ev->key.mod & SDL_KMOD_GUI)) ||
-            ev->key.key == SDLK_F11) {
+#endif
+        /* Fullscreen goes through SC and VI_SetFullscreen so the shortcut and
+           the Display menu row cannot end up disagreeing, and so the choice
+           survives into the next run. */
+        if (ev->key.key == SDLK_F11
+#ifdef SDL_PLATFORM_APPLE
+            || (ev->key.key == SDLK_F && (ev->key.mod & SDL_KMOD_GUI))
+#endif
+           ) {
             SC.fullscreen = !VI_GetFullscreen();
             VI_SetFullscreen(SC.fullscreen);
         }
@@ -111,6 +119,50 @@ static void handle_event(const SDL_Event *ev)
 }
 
 
+/* TEMPORARY -- headless verification hook.
+
+   Windows will not let a process launched from a script raise its own window
+   to the foreground, so a desktop screen-grab of the game captures whatever
+   was already on top instead.  Reading the presented framebuffer from inside
+   the process sidesteps that entirely, the same way the PPM dumps did on
+   macOS, where screencapture is blocked by permissions.
+
+   GREED_SHOT=<prefix> writes <prefix>NNN.ppm at each tick listed in
+   GREED_SHOT_AT (comma-separated, default "70,210,420").  Remove once the port
+   has been played through by hand. */
+static void maybe_shot(void)
+{
+    extern void VI_DumpPresented(char *);
+    const char *prefix = getenv("GREED_SHOT");
+    const char *at;
+    char        list[256], path[512];
+    char       *tok, *save;
+    static longint last;
+    longint     now;
+
+    if (!prefix)
+        return;
+
+    now = timecount / 2;              /* timecount runs in half-ticks */
+    if (now == last)
+        return;
+
+    at = getenv("GREED_SHOT_AT");
+    SDL_strlcpy(list, at ? at : "70,210,420", sizeof(list));
+
+    for (tok = strtok_r(list, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+        longint want = (longint)atoi(tok);
+        if (last < want && now >= want) {
+            SDL_snprintf(path, sizeof(path), "%s%ld.ppm", prefix, (long)want);
+            VI_DumpPresented(path);
+            printf("SHOT %s at tick %ld\n", path, (long)now);
+        }
+    }
+
+    last = now;
+}
+
+
 void Sys_Frame(void)
 {
     SDL_Event ev;
@@ -144,6 +196,8 @@ void Sys_Frame(void)
 
     while (ticks-- > 0)
         INT_TimerISR();
+
+    maybe_shot();
 }
 
 
@@ -194,7 +248,7 @@ int main(int argc, char *argv[])
     Sys_InitPaths();
     Sys_InputInit();
 
-    printf("\nIn Pursuit of Greed (macOS port)\n\n");
+    printf("\nIn Pursuit of Greed (%s port)\n\n", SDL_GetPlatform());
 
     startup();
 

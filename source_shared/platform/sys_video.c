@@ -109,7 +109,15 @@ void VI_Init(int specialbuffer)
     (void)specialbuffer;
 
     /* InitSound has already read SETUP.CFG by the time LoadData gets here, so
-       SC.fullscreen is the value from the last run. */
+       SC.fullscreen is the value from the last run.  -window overrides it for
+       this run only, without writing the choice back: the default is
+       fullscreen (Modplay.c's built-in defaults set SC.fullscreen=1), and a
+       fullscreen window that never gains focus gets minimised by SDL, which
+       makes the game impossible to observe when it is launched from a script
+       rather than by hand. */
+    if (MS_CheckParm("window"))
+        SC.fullscreen = 0;
+
     flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (SC.fullscreen)
         flags |= SDL_WINDOW_FULLSCREEN;
