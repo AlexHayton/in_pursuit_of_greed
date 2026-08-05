@@ -157,6 +157,30 @@ than convenient.
   understood (Windows foreground restrictions, below). Switched to in-process framebuffer dumps and
   got usable images immediately.
 - **2026-08-05** — Intro FLI and in-game 3D view both confirmed correct by looking at the dumps.
+- **2026-08-05** — `source_shared` fix, so it lands on this port too: the music went silent a few
+  hundred ms into every mission briefing. The libxmp stream is topped up by polling from
+  `UpdateSound()`, which was reached only from `Sys_PumpFrame()` and the play loop's `TimeUpdate()` —
+  and the briefings call neither, since every pause in them is a `Wait()` and `Wait()` spins on
+  `Sys_Frame()`. Moved the `UpdateSound()` call into `Sys_Frame()` itself (after the tick loop, so it
+  runs at 35 Hz) and dropped it from `Sys_PumpFrame()`. Nothing platform-specific about the cause or
+  the fix; measured on macOS with a queue-depth probe, and untested on Windows only because the
+  soundtrack has not been listened to on this port yet.
+- **2026-08-05** — More `source_shared` changes, all of which land here too. The HUD was never drawn:
+  `currentViewSize` was pinned at 0, which draws no status bar, and in HD `ChangeViewSize` returned
+  early so F9/F10 could not change it either (and jammed after one press). `MaxViewSize()` now caps HD
+  at view size 3 — sizes 0..3 are all a full 320x200 view in `viewSizes[]` and differ only in HUD
+  coverage — `InitData` applies the saved `SC.screensize`, and the default is 3. The options menu's
+  camera delay row became "HUD DENSITY" driving that value, with the delay locked to its minimum.
+  Key defaults changed too: A.S.S. cam C -> V, motion sensor S -> C (S is `bt_south` here, so walking
+  backwards was toggling the sensor). SETUP.CFG is version 3 as a result and bindings from older files
+  are dropped, since neither port has a key config screen to undo them with. All verified on macOS by
+  framebuffer dump; untested on Windows, though nothing in it is platform-specific.
+- **2026-08-06** — `source_shared` again: the help page is drawn in code instead of being the baked
+  `INFO1` lump, so its key names come from `scanbuttons[]` and match whatever the port's defaults are.
+  Backdrop is the `BRIEF3` artwork with its palette dimmed to 24% and text ramps built in the indices
+  it leaves unused. Its wait loop pumps frames now rather than sitting in `Wait(10)` — worth noting
+  here because an unrepainted window is more visible on Windows, where the compositor is happy to
+  hand back a stale surface. Verified on macOS only.
 
 ---
 

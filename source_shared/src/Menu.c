@@ -123,17 +123,19 @@ cursor_t cursors[MENUS][15]=
    134, 60, 127, 15,
    134, 74, 127, 15,
    134, 88, 127, 15,
-   /* Rows 7-9 replace what used to be one baked "screen size" row at
-      134,101 and one "camera delay" row at 134,115.  The screen size slider
-      was a 1995 way to buy frame rate by rendering less of the view; it is
-      pointless now and was in fact broken below full size (RF_BlitView copies
-      a fixed 320x200 and ignores windowWidth).  Its space, plus the blank
-      panel strip below the old last row, is repainted by MenuShowOptions and
-      relabelled here -- which is also where fullscreen fits without needing a
-      whole extra menu screen there is no artwork for. */
+   /* Rows 7-9 replace what used to be one baked "screen size" row at 134,101
+      and one "camera delay" row at 134,115.  Their space, plus the blank panel
+      strip below the old last row, is repainted by MenuShowOptions and
+      relabelled here -- which is where the renderer and fullscreen rows fit
+      without needing a whole extra menu screen there is no artwork for.
+
+      The setting behind the old screen-size row is back, as row 9: it turned
+      out to be what decides how much of the HUD is drawn, so with no row for
+      it the game was pinned at size 0 and had no HUD at all.  The camera delay
+      it displaced is locked to its minimum instead; see InitSound. */
    134, 103, 127, 11,   // renderer: original / HD
    134, 114, 127, 11,   // fullscreen
-   134, 125, 127, 10,   // camera delay
+   134, 125, 127, 10,   // HUD density (the engine's view size)
    142, 142, 62, 15,
    0, 0, 0, 0,
    0, 0, 0, 0,
@@ -518,7 +520,11 @@ void MenuShowOptions(void)
   memset(ylookup[i]+OPTPANEL_X,1,OPTPANEL_W);
  MenuDrawOptionRow(105,"RENDERER",SC.hdmode ? "HD" : "ORIGINAL");
  MenuDrawOptionRow(116,"FULLSCREEN",SC.fullscreen ? "ON" : "OFF");
- MenuDrawOptionRow(127,"CAMERA DELAY","");
+ /* "HUD DENSITY", not "SCREEN SIZE": the setting behind it is still the engine's
+    view size (SC.screensize / currentViewSize) and is spelled that way in the
+    code, but sizes 0..3 leave the view full screen and differ only in how much
+    of the HUD is drawn, which is what the player is actually choosing here. */
+ MenuDrawOptionRow(127,"HUD DENSITY","");
 
  switch (menucursor)
   {
@@ -552,9 +558,30 @@ void MenuShowOptions(void)
    case 8: // fullscreen
     MenuShowOptionValue(SC.fullscreen ? "ON" : "OFF");
     break;
-   case 9: // asscam
-    VI_DrawPic(35,29,CA_CacheLump(CA_GetNamedNum("menucamsli")));
-    ShowMenuSliders(SC.camdelay,70);
+   /* HUD density, on the row the camera delay used to have.  The delay is
+      pinned to its minimum now (see InitSound), and this is the setting that
+      actually needed to come back: it is the engine's view size, and with no
+      row for it the game was stuck at size 0 -- which draws no HUD at all.
+      "menuscrsli" is the original artwork for this slider, still in GREED.BLO
+      from when the row existed.
+
+      Not drawn inverted the way the DOS screen-size slider was: read as HUD
+      density a full bar is the full HUD, which also puts left and right the
+      same way round as the volume rows above.  The range is MaxViewSize()
+      rather than a fixed 9 because HD stops at 3. */
+   case 9: // HUD density (view size)
+    VI_DrawPic(35,29,CA_CacheLump(CA_GetNamedNum("menuscrsli")));
+    /* That bitmap has "SCREEN" baked into its title strip, between the 0 and
+       10 range markers.  Paint the word out and print the row's real name in
+       its place -- 45..85 by rows 32..39, measured off the drawn pic. */
+    for(i=32;i<40;i++)
+     memset(ylookup[i]+45,0,41);
+    fontbasecolor=178;      /* lands the glyph ramp in the artwork's magenta */
+    font=font1;
+    printx=45+(41-FN_RawWidth("HUD"))/2;
+    printy=33;
+    FN_RawPrint3("HUD");
+    ShowMenuSliders(SC.screensize,MaxViewSize());
     break;
    }
  MenuDrawCursorBox();
@@ -614,11 +641,11 @@ void MenuLeft(void)
       VI_SetFullscreen(SC.fullscreen);
       MenuShowOptions();
       break;
-     case 9: // camera delay
-      if (SC.camdelay)
+     case 9: // HUD density
+      if (SC.screensize)
        {
-	SC.camdelay--;
-	ShowMenuSliders(SC.camdelay,70);
+	SC.screensize--;
+	ShowMenuSliders(SC.screensize,MaxViewSize());
 	}
       break;
      }
@@ -679,11 +706,11 @@ void MenuRight(void)
       VI_SetFullscreen(SC.fullscreen);
       MenuShowOptions();
       break;
-     case 9: // camera delay
-      if (SC.camdelay<70)
+     case 9: // HUD density
+      if (SC.screensize<MaxViewSize())
        {
-	SC.camdelay++;
-	ShowMenuSliders(SC.camdelay,70);
+	SC.screensize++;
+	ShowMenuSliders(SC.screensize,MaxViewSize());
 	}
       break;
      }
@@ -974,7 +1001,7 @@ void Execute(int level,int cursor)
       case 4: // violence
       case 5: // animations
       case 6: // ambient light
-      case 9: // camera delay
+      case 9: // HUD density
        break;
       /* The rows above are driven by the left/right arrows drawn into their
 	 widget bitmaps.  These two have no bitmap and so no arrows to click,
@@ -1130,12 +1157,13 @@ void CheckMouse(void)
       break;
      /* 7 and 8 have no slider and no arrows; clicking the row runs Execute,
 	which toggles them. */
-     case 9:
+     case 9: // HUD density
       if (y>=49 && y<=64 && x>=42 && x<=90)
        {
-	SC.camdelay=((x-40)*70)/49;
-	if (SC.camdelay>70) SC.camdelay=70;
-	ShowMenuSliders(SC.camdelay,70);
+	SC.screensize=((x-40)*(MaxViewSize()+1))/49;
+	if (SC.screensize<0) SC.screensize=0;
+	else if (SC.screensize>MaxViewSize()) SC.screensize=MaxViewSize();
+	ShowMenuSliders(SC.screensize,MaxViewSize());
 	}
       break;
      }
@@ -1221,6 +1249,204 @@ void ShowMenu(int n)
 
 /**************************************************************************/
 
+/* The help page.
+
+   It used to be the `INFO1` lump: one baked 320x200 image with every key name
+   painted into it.  That was already wrong on arrival here -- this port moved
+   movement to WASD, use to E, jump to Space and so on -- and the picture told
+   the player to "RUN SETUP IN DOS TO ALTER THE ABOVE KEYS", which there is no
+   longer any such thing as.  Drawing the page instead means the bindable rows
+   read out of scanbuttons[], so they cannot go stale again.
+
+   The backdrop is `BRIEF3`, the weapons still life from the first mission
+   briefing.  That is the same artwork INFO1 had dimmed behind its text, which
+   is why it looks right: this dims its palette rather than its pixels, to the
+   same end.
+
+   Colours are indices into BRIEF3's OWN palette, not the game's -- loadscreen
+   brings a screen's palette with it, and BRIEF3's differs from the main one in
+   748 of its 768 bytes.  The picture leaves 3..31 unused (measured, not
+   assumed), so three seven-entry ramps are built there for the text.  The font
+   adds a 1..6 gradient to fontbasecolor, hence the seven. */
+
+#define HELPDIM       24          /* percent of full brightness for the art --
+                                     BRIEF3 is lit for a full screen of its own
+                                     and swallows text at anything brighter */
+#define HELPKEYCOL     3          /* amber: the key itself */
+#define HELPTEXTCOL   11          /* white: what it does */
+#define HELPHEADCOL   19          /* green: section headings */
+
+#define HELPLEFT       8
+#define HELPRIGHT    166
+#define HELPACTION    50          /* action column, relative to the key */
+#define HELPROW        8          /* font1 is 6 tall, so this leaves 2 clear */
+
+
+static char *HelpKeyName(int sc)
+/* Printable name for a scan code.  ASCIINames covers everything that produces
+   a character; the rest have to be spelled out. */
+{
+ static char one[2];
+ char        c;
+
+ switch (sc)
+  {
+   case SC_CONTROL:    return "CTRL";
+   case SC_ALT:        return "ALT";
+   case SC_LSHIFT:     return "SHIFT";
+   case SC_RSHIFT:     return "R SHIFT";
+   case SC_SPACE:      return "SPACE";
+   case SC_ENTER:      return "ENTER";
+   case SC_ESCAPE:     return "ESC";
+   case SC_BACKSPACE:  return "BKSP";
+   case SC_TAB:        return "TAB";
+   case SC_CAPSLOCK:   return "CAPS LOCK";
+   case SC_NUMLOCK:    return "NUM LOCK";
+   case SC_UPARROW:    return "UP ARROW";
+   case SC_DOWNARROW:  return "DN ARROW";
+   case SC_LEFTARROW:  return "LF ARROW";
+   case SC_RIGHTARROW: return "RT ARROW";
+   case SC_INSERT:     return "INSERT";
+   case SC_DELETE:     return "DELETE";
+   case SC_HOME:       return "HOME";
+   case SC_END:        return "END";
+   case SC_PGUP:       return "PAGE UP";
+   case SC_PGDN:       return "PAGE DN";
+   case SC_MINUS:      return "-";
+   case SC_PLUS:       return "+";
+   }
+ if (sc>0 && sc<NUMCODES && ASCIINames[sc]>' ' && ASCIINames[sc]<127)
+  {
+   c=(char)ASCIINames[sc];
+   if (c>='a' && c<='z') c-='a'-'A';    /* the fonts are upper case only */
+   one[0]=c;
+   one[1]=0;
+   return one;
+   }
+ return "--";
+ }
+
+
+static void HelpRow(int x,int y,char *key,char *action)
+{
+ font=font1;
+ fontbasecolor=HELPKEYCOL;
+ printx=x;
+ printy=y;
+ FN_RawPrint3(key);
+ fontbasecolor=HELPTEXTCOL;
+ printx=x+HELPACTION;
+ printy=y;
+ FN_RawPrint3(action);
+ }
+
+
+static void HelpHeading(int x,int y,char *s)
+{
+ font=font1;
+ fontbasecolor=HELPHEADCOL;
+ printx=x;
+ printy=y;
+ FN_RawPrint3(s);
+ }
+
+
+static void HelpRamp(int base,int r1,int g1,int b1,int r2,int g2,int b2)
+/* Seven entries from (r1,g1,b1) to (r2,g2,b2), in VGA 0..63 levels. */
+{
+ int i;
+
+ for (i=0;i<=6;i++)
+  {
+   colors[(base+i)*3+0]=(byte)(r1+((r2-r1)*i)/6);
+   colors[(base+i)*3+1]=(byte)(g1+((g2-g1)*i)/6);
+   colors[(base+i)*3+2]=(byte)(b1+((b2-b1)*i)/6);
+   }
+ }
+
+
+static void DrawHelpPage(void)
+{
+ int i, y;
+
+ loadscreen("BRIEF3");
+
+ /* Dim the artwork, then cut the text ramps back in at full strength.  Order
+    matters: the dim would take the ramps down with everything else. */
+ for (i=0;i<768;i++)
+  colors[i]=(byte)(((int)colors[i]*HELPDIM)/100);
+ HelpRamp(HELPKEYCOL,  26,16, 0, 63,48,10);      /* amber */
+ HelpRamp(HELPTEXTCOL, 24,24,24, 63,63,63);      /* white */
+ HelpRamp(HELPHEADCOL,  0,24, 0, 24,63,24);      /* green */
+
+ /* BRIEF3 carries a baked "PRESS SPACE BAR TO CONTINUE" across the bottom,
+    which is not what this screen wants said. */
+ for (i=182;i<200;i++)
+  memset(ylookup[i],0,320);
+
+ font=font1;
+ fontbasecolor=HELPKEYCOL;
+ printy=6;
+ FN_PrintCentered("GREED COMMAND KEYS");
+
+ y=22;
+ HelpHeading(HELPLEFT,y,"MOVEMENT");
+ y+=10;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_north]),      "MOVE FORWARD"); y+=HELPROW;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_south]),      "MOVE BACK");    y+=HELPROW;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_west]),       "TURN LEFT");    y+=HELPROW;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_east]),       "TURN RIGHT");   y+=HELPROW;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_slideleft]),  "STRAFE LEFT");  y+=HELPROW;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_slideright]), "STRAFE RIGHT"); y+=HELPROW;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_straf]),      "TURN = STRAFE");y+=HELPROW;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_run]),        "RUN");          y+=HELPROW;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_jump]),       "JUMP");         y+=HELPROW;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_lookup]),     "LOOK UP");      y+=HELPROW;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_lookdown]),   "LOOK DOWN");    y+=HELPROW;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_centerview]), "CENTER VIEW");  y+=HELPROW;
+
+ y+=3;
+ HelpHeading(HELPLEFT,y,"ACTION");
+ y+=10;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_fire]),       "FIRE");         y+=HELPROW;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_use]),        "USE / OPEN");   y+=HELPROW;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_useitem]),    "USE ITEM");     y+=HELPROW;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_invleft]),    "PREV ITEM");    y+=HELPROW;
+ HelpRow(HELPLEFT,y,HelpKeyName(scanbuttons[bt_invright]),   "NEXT ITEM");
+
+ /* The right hand column is the keys PlayerCommand tests directly rather than
+    through scanbuttons[], so these are spelled from the same SC_ constants it
+    uses -- change one and this goes with it. */
+ y=22;
+ HelpHeading(HELPRIGHT,y,"DISPLAY");
+ y+=10;
+ HelpRow(HELPRIGHT,y,HelpKeyName(SC_M),                      "MAP MODES");    y+=HELPROW;
+ HelpRow(HELPRIGHT,y,"+ -",                                  "MAP ZOOM");     y+=HELPROW;
+ HelpRow(HELPRIGHT,y,HelpKeyName(SC_H),                      "HEAT SENSOR");  y+=HELPROW;
+ HelpRow(HELPRIGHT,y,HelpKeyName(SC_C),                      "MOTION SENSOR");y+=HELPROW;
+ HelpRow(HELPRIGHT,y,HelpKeyName(scanbuttons[bt_asscam]),    "A.S.S. CAM");   y+=HELPROW;
+ HelpRow(HELPRIGHT,y,HelpKeyName(SC_TAB),                    "TARGET LIST");  y+=HELPROW;
+ HelpRow(HELPRIGHT,y,"F9 F10",                               "HUD DENSITY");
+
+ y+=11;
+ HelpHeading(HELPRIGHT,y,"GAME");
+ y+=10;
+ HelpRow(HELPRIGHT,y,"1 - 5",                                "WEAPONS");      y+=HELPROW;
+ HelpRow(HELPRIGHT,y,HelpKeyName(SC_CAPSLOCK),               "AUTO-RUN");     y+=HELPROW;
+ HelpRow(HELPRIGHT,y,HelpKeyName(SC_NUMLOCK),                "AUTO-TARGET");  y+=HELPROW;
+ HelpRow(HELPRIGHT,y,HelpKeyName(SC_P),                      "PAUSE");        y+=HELPROW;
+ HelpRow(HELPRIGHT,y,HelpKeyName(SC_ESCAPE),                 "MENU");         y+=HELPROW;
+ HelpRow(HELPRIGHT,y,"F1",                                   "HELP");         y+=HELPROW;
+ HelpRow(HELPRIGHT,y,"F5",                                   "BRIEFING");     y+=HELPROW;
+ HelpRow(HELPRIGHT,y,"F6",                                   "SEND MESSAGE");
+
+ font=font1;
+ fontbasecolor=HELPKEYCOL;
+ printy=188;
+ FN_PrintCentered("PRESS ANY KEY TO CONTINUE");
+ }
+
+
 void ShowHelp(void)
 {
  byte *s;
@@ -1242,13 +1468,18 @@ void ShowHelp(void)
  fread(colors,768,1,f);
  fclose(f);
 #else
- loadscreen("INFO1");
+ DrawHelpPage();
 #endif
  VI_SetPalette(colors);
  newascii=false;
  for(;;)
   {
-   Wait(10);
+   /* Sys_PumpFrame, not the bare Wait(10) this was: `screen` was the visible
+      framebuffer in DOS, so nothing here ever had to present.  Now the page is
+      shown only by the single VI_BlitView inside VI_SetPalette above, and
+      anything that disturbs the window while help is up leaves it unrepainted.
+      Every other screen that sits waiting for a key pumps for the same reason. */
+   Sys_PumpFrame();
    if (netmode) TimeUpdate();
    if (newascii || quitgame) break;
    }
@@ -1281,7 +1512,12 @@ void ShowHelp(void)
  VI_FillPalette(0,0,0);
 #endif
 
- VI_SetPalette(CA_CacheLump(CA_GetNamedNum("palette")));
+ /* Put the game palette back in colors[] and not just on the screen.  It is a
+    global that VI_FadeIn and the briefing fades read, and DrawHelpPage has left
+    a dimmed copy of BRIEF3's in it.  This did not matter when the page was
+    INFO1, whose palette is the game's byte for byte. */
+ memcpy(colors,CA_CacheLump(CA_GetNamedNum("palette")),768);
+ VI_SetPalette(colors);
  memcpy(screen,s,64000);
  free(s);
  }

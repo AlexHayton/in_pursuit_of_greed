@@ -483,6 +483,10 @@
 #define MAXSTARTLOCATIONS 8
 #define MAXCHARTYPES      6
 #define MAXVIEWSIZE       10
+/* Sizes 0..3 are the ones viewSizes[] leaves at a full 320x200 view; they
+   differ only in how much of the overlay HUD is drawn.  Everything above 4
+   shrinks the view, which HD cannot do -- see MaxViewSize. */
+#define HDMAXVIEWSIZE      3
 
 typedef struct SoundCard_s
  {
@@ -630,6 +634,7 @@ void       KillSprite(scaleobj_t *sp,int weapon);
 void       LoadNewMap(int lump);
 void       loadweapon(int n);
 void       ChangeViewSize(byte MakeLarger);
+int        MaxViewSize(void);
 void       heal(int n);
 void       medpaks(int n);
 void       hurt(int n);

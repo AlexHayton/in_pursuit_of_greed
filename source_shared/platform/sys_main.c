@@ -197,6 +197,20 @@ void Sys_Frame(void)
     while (ticks-- > 0)
         INT_TimerISR();
 
+    /* Top the music stream up here rather than only in Sys_PumpFrame.  The
+       stream holds a quarter second, so anything that pumps frames without
+       refilling it goes silent almost immediately -- which is what the mission
+       briefings did: every one of their pauses is a Wait(), Wait() spins on
+       Sys_Frame(), and nothing on that path reached UpdateSound.  The
+       soundtrack died a few hundred ms into the first page and only came back
+       when the play loop's TimeUpdate started calling UpdateSound again.  The
+       intro text screens, the credits and StopMusic's own fade-out had the
+       same hole.
+
+       After the tick loop, so it runs at the 35 Hz tick rather than at the
+       speed of a spin loop that isn't throttled by anything. */
+    UpdateSound();
+
     maybe_shot();
 }
 
@@ -220,11 +234,6 @@ void Sys_Frame(void)
 void Sys_PumpFrame(void)
 {
     Sys_Frame();
-    /* The music stream is topped up by polling, from UpdateSound -> and that
-       is only reached from TimeUpdate() in the play loop.  Without this call
-       the soundtrack starves and cuts out for the whole of the FLI cutscenes
-       and any time the menu is open. */
-    UpdateSound();
     VI_BlitView();
 }
 

@@ -126,7 +126,7 @@ int scanbuttons[NUMBUTTONS] =
  SC_LSHIFT,        // bt_run
  SC_SPACE,         // bt_jump         (was SC_Z)
  SC_Q,             // bt_useitem      (was SC_X)
- SC_C,             // bt_asscam       (was SC_A, which is now strafe-left)
+ SC_V,             // bt_asscam       (was SC_A, which is now strafe-left)
  SC_PGUP,          // bt_lookup
  SC_PGDN,          // bt_lookdown
  SC_HOME,          // bt_centerview

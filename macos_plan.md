@@ -144,7 +144,9 @@ assumptions:
   character actually on the keycap.
 - The libxmp music stream is topped up by polling, from `UpdateSound()`, which is only reached from
   `TimeUpdate()` in the play loop. So the soundtrack starved and cut out for the whole of every FLI
-  cutscene and whenever the menu was open. `Sys_PumpFrame()` now calls `UpdateSound()`.
+  cutscene and whenever the menu was open. First fixed by calling `UpdateSound()` from
+  `Sys_PumpFrame()`; that turned out to be too narrow — see the 2026-08-05 briefing entry — and the
+  call now lives in `Sys_Frame()`, which every pump goes through.
 
 Not a bug: **the menus have no click sounds because the original had none** — `SoundEffect` appears zero
 times in both `source_dos/CODE/MENU.C` and this tree's `Menu.c`. FLI files carry no audio track either;
@@ -325,6 +327,64 @@ Also fixed, unrelated to word size:
   called them directly, in the briefing, the menu, the help page and `EndGame1` during both its movies
   and its credits. Every case exits **0.2–0.7s** after the signal with the screen's function returning
   normally, against the briefing before the fix surviving to a SIGKILL 25s later.
+- **2026-08-05** — User reports the music stopping in `MissionBriefing`. The FLI/menu starvation fix
+  above was put in `Sys_PumpFrame()`, but the briefings never call it: every pause in them is a
+  `Wait()`, and `Wait()` spins on `Sys_Frame()` alone. The stream holds ~250ms, so the soundtrack died
+  a few hundred ms into the first page and stayed dead until `TimeUpdate()` picked it up in the play
+  loop — pressing space to turn a page is simply where the silence gets noticed. Moved the
+  `UpdateSound()` call down into `Sys_Frame()`, after the tick loop so it runs at 35 Hz rather than at
+  the speed of an unthrottled spin, and dropped it from `Sys_PumpFrame()`. The intro text screens (they
+  call `UpdateSound()` by hand, which is the tell), the credits and `StopMusic`'s own fade-out all had
+  the same hole. Measured rather than argued: a temporary probe logging `SDL_GetAudioStreamQueued` every
+  500ms during the map 0 briefing, driven by a temporary `-brieftest` parm calling `newplayer(0,0,2)`
+  from `startup()`. Before, with the fix disabled by env var: 57344 bytes at 348ms and **0 for every
+  sample after**, out to 10s. After: 36864–73728 bytes, never dry, across the same run.
+- **2026-08-05** — User reports the HUD does not work. It never had: the status bar, ammo, shield,
+  inventory and goal readouts are all gated on `currentViewSize`, and size 0 draws none of them. Three
+  things kept it there. `SC.screensize` was force-set to 0 in `InitSound` when the screen-size row was
+  taken out of the options menu; nothing applied `SC.screensize` to `currentViewSize` anyway
+  (`InitData`'s `for (i=0;i<currentViewSize;i++)` cannot loop — the four `ChangeViewSize(false)` calls
+  above it have just driven that to 0, and it is the DOS source's, where the options slider was the
+  only thing that ever set the view size); and in HD `ChangeViewSize` returned before clearing
+  `resizeScreen`, so F9/F10 did nothing and jammed each other after one press. Sizes 0..3 are all
+  320x200 in `viewSizes[]` and differ only in HUD coverage, so HD can offer those four and refuse 4+,
+  which is what `MaxViewSize()` now says. Default is 3, the full overlay HUD over a full-screen view.
+  Verified by looking: PPM at tick 150 of `-nointro`, no HUD before and the full status bar after.
+- **2026-08-05** — *Requested:* the options menu's camera delay row is now HUD density, and the delay
+  is pinned to its minimum (a live rear-view camera). The row drives `SC.screensize` through
+  `MaxViewSize()`, not the DOS 0..9, and reads the natural way round rather than the DOS slider's
+  inverted one — full bar is the full HUD, so left/right match the volume rows above. The original
+  `menuscrsli` artwork is still in `GREED.BLO` and is reused, with the word "SCREEN" baked into its
+  title strip painted out (rows 32..39, x 45..85, measured by dumping `screen` from a temporary hook
+  rather than guessed) and "HUD" printed in its place at `fontbasecolor` 178, which lands the glyph
+  ramp in the artwork's own magenta. The 0 and 10 range markers either side are baked and left alone;
+  they were already only roughly the range in the DOS build and are wrong by more in HD, where the
+  range is 0..3.
+- **2026-08-05** — *Requested:* A.S.S. cam default moved C -> V, motion sensor S -> C. The sensor was
+  the DOS build's hardcoded `SC_S`, which in this port's WASD defaults is `bt_south` — every step
+  backwards toggled it. Note what this exposed: there is **no key config screen anywhere in this
+  port** (SETUP.EXE was where the DOS game did that), so `SC.ckeys` read back from a saved SETUP.CFG
+  pins a binding with no way to reach the new default. SETUP.CFG is now version 3 and `InitSound`
+  drops the bindings from any older file, keeping the rest of it and writing the defaults back on the
+  next save. Confirmed by hexdump of the written file: version 3, `ckeys[6]` 0x2e -> 0x2f, camdelay
+  35 -> 0.
+- **2026-08-06** — *Requested:* the help page (F1) is drawn rather than loaded. It was the `INFO1`
+  lump, one baked image with every key name painted into it, and it had been wrong since the day the
+  controls were modernised — arrows for movement, Z jump, X use item, A for the cam, Space for doors,
+  and "RUN SETUP IN DOS TO ALTER THE ABOVE KEYS", which there is no longer any such thing as. The
+  bindable rows now read out of `scanbuttons[]`, so they cannot drift again; the fixed rows are
+  spelled from the same `SC_` constants `PlayerCommand` tests. `HelpKeyName` names a scan code, using
+  `ASCIINames` for anything that produces a character.
+  Backdrop is `BRIEF3`, the weapons still life from the first briefing — the same artwork INFO1 had
+  dimmed behind its text. Two things worth knowing for anything else that draws over a `loadscreen`:
+  a screen brings its own palette, and BRIEF3's differs from the game's in 748 of 768 bytes, so menu
+  font colours mean nothing over it. The page dims that palette to 24% and builds three seven-entry
+  text ramps in indices 3..31, which a histogram of the lump shows it does not use. And `colors[]` is
+  a global the fades read: ShowHelp now puts the game palette back into it on the way out, which INFO1
+  never needed because its palette *was* the game's, byte for byte.
+  The wait loop also pumps frames now instead of `Wait(10)`; `screen` was the visible framebuffer in
+  DOS, so nothing here ever had to present, and the page was drawn by the single blit inside
+  `VI_SetPalette`. Verified by looking at the rendered page.
 - **2026-08-04** — Added a top-level `.gitignore` (`.DS_Store`, `build/`, `build-*/`, `*.dSYM/`, editor
   dirs), so `git status` shows only real sources. Note what this exposes: **none of `source_macos/` is
   committed yet** — the whole port is still untracked working-tree state on top of the 2022 import.

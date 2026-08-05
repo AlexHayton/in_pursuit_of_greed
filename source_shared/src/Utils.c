@@ -755,15 +755,28 @@ void ResetScalePostWidth (int NewWindowWidth)
  }
 
 
+int MaxViewSize(void)
+/* The largest view size the current render mode offers.
+
+   In HD the view size is the render resolution, chosen by VI_ApplyRenderMode
+   from the display, so the viewSizes[] table cannot apply.  Sizes 0..3 still
+   can: all four are 320x200 in that table and differ only in how much of the
+   2D overlay HUD is drawn, so the rebuild in ChangeViewSize never fires for
+   them and the HD view is left alone.  4 and up shrink the view, which is
+   what HD has to refuse. */
+{
+ return hdmode ? HDMAXVIEWSIZE : MAXVIEWSIZE-1;
+ }
+
+
 void ChangeViewSize(byte MakeLarger)
 {
  int lastviewsize;
 
- /* In HD the view size is the render resolution, chosen by VI_ApplyRenderMode
-    from the display, and the viewSizes[] table does not apply.  newplayer walks
-    this function up and down four times to force the tables to rebuild, which
-    would otherwise drop the view straight back to 320x200. */
- if (hdmode) return;
+ /* This used to return immediately in HD, which cost more than the view size:
+    resizeScreen is cleared below and PlayerCommand will not accept another
+    F9/F10 until it is, so one press killed both keys for the rest of the run.
+    The HD restriction is the size limit above, not the whole function. */
 
  if (SC.vrhelmet==1)
   {
@@ -776,7 +789,7 @@ void ChangeViewSize(byte MakeLarger)
  resizeScreen=0;
  if (MakeLarger)
   {
-   if (currentViewSize<MAXVIEWSIZE-1) currentViewSize++;
+   if (currentViewSize<MaxViewSize()) currentViewSize++;
     else return;
    }
  else

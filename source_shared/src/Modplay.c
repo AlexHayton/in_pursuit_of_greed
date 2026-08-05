@@ -56,10 +56,19 @@ static int DVolume[MAXSOUNDDIST];   /* 0..63 by squared distance */
    structsize match would have thrown away every version 1 file -- volumes and
    key bindings included -- for the sake of two new ints, so a shorter struct
    from an older version is read as the prefix it is.  The caller must have
-   already set the tail to its defaults; see InitSound. */
+   already set the tail to its defaults; see InitSound.
+
+   Version 3 changed a default binding.  The version is reported to the caller
+   because a saved file is not something the player can edit around: this port
+   has no key config screen -- SETUP.EXE was where the DOS game did that -- so
+   ckeys read back from an older file would pin the old binding forever, and
+   there would be no way to reach the new one.  setupversion is 0 when no file
+   was loaded at all. */
 
 #define SETUP_MAGIC   0x44454247UL   /* 'GBED' little-endian */
-#define SETUP_VERSION 2
+#define SETUP_VERSION 3
+
+unsigned int setupversion;
 
 typedef struct {
     unsigned int magic;
@@ -90,6 +99,7 @@ int LoadSetup(SoundCard *SC, char *Filename)
         return 1;
     }
     close(Handle);
+    setupversion = hdr.version;
     return 0;
 }
 
@@ -180,8 +190,9 @@ void InitSound(void)
    SC.ckeys[12]=scanbuttons[bt_invleft];
    SC.ckeys[13]=scanbuttons[bt_invright];
    SC.inversepan=false;
-   SC.screensize=0;
-   SC.camdelay=35;
+   SC.screensize=3;      /* full view WITH the overlay HUD; DOS defaulted to 0,
+                            which is the same view and no HUD at all */
+   SC.camdelay=0;        /* locked to the minimum -- see below */
    SC.effecttracks=4;
    SC.mouse=1;
    SC.joystick=0;
@@ -219,26 +230,61 @@ void InitSound(void)
    else printf("Success\n");
    }
 
- /* The screen size slider is gone from the options menu, so nothing can undo a
-    non-zero value carried in from an older SETUP.CFG.  Full view, always. */
- SC.screensize=0;
+ /* Range-check rather than force.  This used to be a flat `SC.screensize=0`,
+    on the grounds that the options menu no longer has the screen-size slider
+    to undo a bad value -- but 0 is the one size that draws no HUD at all, so
+    that pinned the game to a bare view and made F9/F10 pointless. */
+ if (SC.screensize<0 || SC.screensize>MAXVIEWSIZE-1) SC.screensize=3;
+
+ /* The camera delay row gave up its place in the options menu to the screen
+    size, so nothing can set this any more: pin it to the minimum, which is the
+    rear-view camera refreshing every frame rather than holding a stale frame
+    for up to two seconds.  Note 70 is not just the slowest refresh -- PlayLoop
+    reads it as "one snapshot, then switch the camera off". */
+ SC.camdelay=0;
 
  MusicSwapChannels=SC.inversepan;
 
- scanbuttons[bt_run]=SC.ckeys[0];
- scanbuttons[bt_jump]=SC.ckeys[1];
- scanbuttons[bt_straf]=SC.ckeys[2];
- scanbuttons[bt_fire]=SC.ckeys[3];
- scanbuttons[bt_use]=SC.ckeys[4];
- scanbuttons[bt_useitem]=SC.ckeys[5];
- scanbuttons[bt_asscam]=SC.ckeys[6];
- scanbuttons[bt_lookup]=SC.ckeys[7];
- scanbuttons[bt_lookdown]=SC.ckeys[8];
- scanbuttons[bt_centerview]=SC.ckeys[9];
- scanbuttons[bt_slideleft]=SC.ckeys[10];
- scanbuttons[bt_slideright]=SC.ckeys[11];
- scanbuttons[bt_invleft]=SC.ckeys[12];
- scanbuttons[bt_invright]=SC.ckeys[13];
+ /* Bindings from a file written before version 3 are dropped, not applied: the
+    A.S.S. cam default moved from C to V there, and C became the motion sensor.
+    Honouring the old ckeys would leave C doing both at once, with no key config
+    screen anywhere in this port to undo it.  Everything else in the file is
+    still the player's.  The defaults are copied back into SC so the next
+    SaveSetup writes them out and this only happens once. */
+ if (setupversion>=3)
+  {
+   scanbuttons[bt_run]=SC.ckeys[0];
+   scanbuttons[bt_jump]=SC.ckeys[1];
+   scanbuttons[bt_straf]=SC.ckeys[2];
+   scanbuttons[bt_fire]=SC.ckeys[3];
+   scanbuttons[bt_use]=SC.ckeys[4];
+   scanbuttons[bt_useitem]=SC.ckeys[5];
+   scanbuttons[bt_asscam]=SC.ckeys[6];
+   scanbuttons[bt_lookup]=SC.ckeys[7];
+   scanbuttons[bt_lookdown]=SC.ckeys[8];
+   scanbuttons[bt_centerview]=SC.ckeys[9];
+   scanbuttons[bt_slideleft]=SC.ckeys[10];
+   scanbuttons[bt_slideright]=SC.ckeys[11];
+   scanbuttons[bt_invleft]=SC.ckeys[12];
+   scanbuttons[bt_invright]=SC.ckeys[13];
+   }
+ else
+  {
+   SC.ckeys[0]=scanbuttons[bt_run];
+   SC.ckeys[1]=scanbuttons[bt_jump];
+   SC.ckeys[2]=scanbuttons[bt_straf];
+   SC.ckeys[3]=scanbuttons[bt_fire];
+   SC.ckeys[4]=scanbuttons[bt_use];
+   SC.ckeys[5]=scanbuttons[bt_useitem];
+   SC.ckeys[6]=scanbuttons[bt_asscam];
+   SC.ckeys[7]=scanbuttons[bt_lookup];
+   SC.ckeys[8]=scanbuttons[bt_lookdown];
+   SC.ckeys[9]=scanbuttons[bt_centerview];
+   SC.ckeys[10]=scanbuttons[bt_slideleft];
+   SC.ckeys[11]=scanbuttons[bt_slideright];
+   SC.ckeys[12]=scanbuttons[bt_invleft];
+   SC.ckeys[13]=scanbuttons[bt_invright];
+   }
 
  lighting=1;
  changelight=SC.ambientlight;

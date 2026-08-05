@@ -1646,7 +1646,9 @@ void ControlMovement (void)
    resizeScreen=1;
    biggerScreen=1;
    keyboardDelay=timecount+KBDELAY;
-   if (SC.screensize<9) SC.screensize++;
+   /* MaxViewSize rather than a literal 9, so this cannot run away from
+      currentViewSize in HD -- ChangeViewSize stops at 3 there. */
+   if (SC.screensize<MaxViewSize()) SC.screensize++;
    return;
    }
  if (keyboard[SC_F10] && !resizeScreen && timecount>keyboardDelay)
@@ -1717,7 +1719,10 @@ void ControlMovement (void)
    toggleheatmode=true;
    keyboardDelay=timecount+KBDELAY;
    }
- if (keyboard[SC_S] && timecount>keyboardDelay && !netmsgstatus)
+ /* C, not the DOS original's S: S is bt_south in this port's WASD defaults, so
+    every step backwards toggled the motion sensor.  The A.S.S. cam moved off C
+    to V to make room. */
+ if (keyboard[SC_C] && timecount>keyboardDelay && !netmsgstatus)
   {
    togglemotionmode=true;
    keyboardDelay=timecount+KBDELAY;
@@ -3658,7 +3663,14 @@ void InitData(void)
  ChangeViewSize(false);
  ChangeViewSize(false);
  ChangeViewSize(false);
- for (i=0;i<currentViewSize;i++)
+ /* Apply the saved view size.  This was `i<currentViewSize`, which cannot loop:
+    the four ChangeViewSize(false) calls above have just driven currentViewSize
+    to 0.  It is the DOS source's, where the options menu's screen-size slider
+    was the only thing that ever set the view size -- and with that slider gone
+    from this port's menu, nothing applied SC.screensize at all, so the game was
+    stuck at size 0 and drew no HUD but the inventory popup. */
+ if (SC.screensize>MaxViewSize()) SC.screensize=MaxViewSize();
+ for (i=0;i<SC.screensize;i++)
   ChangeViewSize(true);
  resetdisplay();
  }
