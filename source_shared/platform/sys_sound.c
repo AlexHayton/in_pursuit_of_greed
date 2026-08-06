@@ -242,7 +242,11 @@ int Sys_MusicPlay(const char *path, int pattern)
     }
 
     /* PlaySong's second argument jumps to an order position, which the DOS
-       code did by poking the DSIK music struct directly. */
+       code did by poking the DSIK music struct directly.  Several of the
+       modules are compilations -- SONG0.S3M is five tracks in one file, which
+       selectsong() hands out at orders 0/20/37/54/73 -- and each section ends
+       with a Bxx position jump back to its own first order, so it loops itself
+       without any help from us. */
     if (pattern)
         xmp_set_position(xmp_ctx, pattern);
 
@@ -305,8 +309,12 @@ void Sys_MusicUpdate(void)
 
     while (SDL_GetAudioStreamQueued(music_stream) <
            (int)(MUSIC_LOW * 2 * sizeof(short))) {
-        /* loop=1: the soundtrack repeats until the level changes. */
-        if (xmp_play_buffer(xmp_ctx, buf, (int)sizeof(buf), 1) != 0) {
+        /* libxmp's loop argument is a *maximum loop count*, not a flag.  It
+           was 1, so xmp_play_buffer returned -1 the moment a track came round
+           for the second time and the music stayed silent until the next
+           PlaySong.  0 disables the cutoff, which is what DSIK did: it had no
+           loop counter at all, it just followed the module's own Bxx jumps. */
+        if (xmp_play_buffer(xmp_ctx, buf, (int)sizeof(buf), 0) != 0) {
             music_running = 0;
             break;
         }

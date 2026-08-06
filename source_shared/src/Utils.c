@@ -2077,8 +2077,8 @@ void respawnplayer(void)
 void PlayerCommand(void);
 
 
-static void BriefingFadeStep(byte *basep,int i,int steps)
-/* One step of a basep->colors palette ramp.  Same interpolation VI_FadeIn
+static void BriefingFadeStep(byte *basep,byte *targetp,int i,int steps)
+/* One step of a basep->targetp palette ramp.  Same interpolation VI_FadeIn
    does, as plain integer arithmetic rather than its signed-char error
    accumulator.  VI_SetPalette presents as a side effect. */
 {
@@ -2086,7 +2086,7 @@ static void BriefingFadeStep(byte *basep,int i,int steps)
  int  j;
 
  for (j=0;j<768;j++)
-  work[j]=(byte)((int)basep[j]+(((int)colors[j]-(int)basep[j])*i)/steps);
+  work[j]=(byte)((int)basep[j]+(((int)targetp[j]-(int)basep[j])*i)/steps);
  VI_SetPalette(work);
  }
 
@@ -2122,10 +2122,41 @@ static void BriefingFadeInPage(int texty,char *text)
    if (fontbasecolor>8) fontbasecolor=8;
    printy=texty;
    FN_PrintCentered(text);
-   BriefingFadeStep(basep,i,steps);
+   BriefingFadeStep(basep,colors,i,steps);
    Wait(1);
    }
  VI_SetPalette(colors);
+ }
+
+
+static void BriefingFadeOutPage(void)
+/* Take a briefing page back down to black, skippably.
+
+   The engine's own VI_FadeOut is what used to run here, and its loop tests no
+   input at all -- so the one beat of a briefing page the player could not cut
+   short was the fade that follows their own press to turn it.  Everything else
+   on the screen already snaps: BriefingFadeInPage, the fontbasecolor caption
+   ramps and the mission-results stats fade.  VI_FadeOut is left alone because
+   the intro, the menus and the end-game screens share it and must not become
+   interruptible; this is the briefing-local mirror image of the fade-in. */
+{
+ byte basep[768], black[768];
+ int  i, steps=64;
+
+ memset(black,0,768);
+ VI_GetPalette(basep);
+ /* Unlike the fade-in, this fade begins with a press already latched -- the one
+    BriefingWaitKey just took to turn the page.  Spend it here or the fade it
+    started would snap on its own first step.  Nothing downstream wants it: the
+    Esc test runs before the fade, and the next page clears newascii anyway. */
+ newascii=false;
+ for (i=1;i<=steps;i++)
+  {
+   if (newascii) i=steps;   /* snap the ramp -- see BriefingFadeInPage */
+   BriefingFadeStep(basep,black,i,steps);
+   Wait(1);
+   }
+ VI_FillPalette(0,0,0);     /* how VI_FadeOut ends too */
  }
 
 
@@ -2186,7 +2217,7 @@ void MissionBriefing(int map)
      }
    BriefingWaitKey();
    if (quitgame || lastascii==27) goto end;
-   VI_FadeOut(0,256,0,0,0,64);
+   BriefingFadeOutPage();
 
 
    loadscreen("BRIEF1");
@@ -2202,7 +2233,7 @@ void MissionBriefing(int map)
       "YOUR ENTRY POINT WILL BE AT THE BASE OF THE COMPLEX.\n");
    BriefingWaitKey();
    if (quitgame || lastascii==27) goto end;
-   VI_FadeOut(0,256,0,0,0,64);
+   BriefingFadeOutPage();
 
    loadscreen("BRIEF2");
    newascii=false;
@@ -2311,7 +2342,7 @@ void MissionBriefing(int map)
        "PAGAN DEITY FOR CENTURIES IN PEACE... UNTIL NOW.\n");
      BriefingWaitKey();
      if (quitgame || lastascii==27) goto end;
-     VI_FadeOut(0,256,0,0,0,64);
+     BriefingFadeOutPage();
 
      loadscreen("BRIEF5");
      newascii=false;
@@ -2326,7 +2357,7 @@ void MissionBriefing(int map)
        "IT IS YOUR MISSION TO ACQUIRE IT.\n");
      BriefingWaitKey();
      if (quitgame || lastascii==27) goto end;
-     VI_FadeOut(0,256,0,0,0,64);
+     BriefingFadeOutPage();
 
      }
    else if (map==16)
@@ -2388,7 +2419,7 @@ void MissionBriefing(int map)
        "QUARTER, AS WELL AS HOUSING MILITARY MIGHT IN THIS SECTOR.\n");
      BriefingWaitKey();
      if (quitgame || lastascii==27) goto end;
-     VI_FadeOut(0,256,0,0,0,64);
+     BriefingFadeOutPage();
 
      loadscreen("BRIEF7");
      newascii=false;
@@ -2404,7 +2435,7 @@ void MissionBriefing(int map)
        "THEY ALL FAILED.\n");
      BriefingWaitKey();
      if (quitgame || lastascii==27) goto end;
-     VI_FadeOut(0,256,0,0,0,64);
+     BriefingFadeOutPage();
 
      }
 
@@ -2459,13 +2490,13 @@ void MissionBriefing(int map)
      FN_PrintCentered(missioninfo[map][0]);
      FN_PrintCentered(missioninfo[map][1]);
      FN_PrintCentered(missioninfo[map][2]);
-     BriefingFadeStep(basep,i,64);
+     BriefingFadeStep(basep,colors,i,64);
      Wait(1);
      }
    VI_SetPalette(colors);
    BriefingWaitKey();
    if (quitgame) goto end;
-   VI_FadeOut(0,256,0,0,0,64);
+   BriefingFadeOutPage();
    }
 
 end:

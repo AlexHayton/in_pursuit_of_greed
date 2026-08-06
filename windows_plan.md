@@ -165,6 +165,15 @@ than convenient.
   runs at 35 Hz) and dropped it from `Sys_PumpFrame()`. Nothing platform-specific about the cause or
   the fix; measured on macOS with a queue-depth probe, and untested on Windows only because the
   soundtrack has not been listened to on this port yet.
+- **2026-08-06** — `source_shared` fix, so it lands on this port too: the music never looped. When a
+  track ended the audio stayed silent until the next `PlaySong`. `Sys_MusicUpdate` passed `loop=1` to
+  `xmp_play_buffer`, but libxmp's `loop` is a *maximum loop count*, not a flag, so it returned `-1`
+  after a single pass and cleared `music_running`. Now `loop=0`, which disables the cutoff. The
+  soundtrack modules loop themselves via `Bxx` position jumps written into the music (each section of
+  the compilation modules jumps back to its own first order), exactly as DSIK followed them in DOS, so
+  nothing else was needed — see `macos_plan.md` for the DSIK disassembly that ruled out the order-list
+  emulation this first appeared to require. Verified on macOS with a headless libxmp harness tracing
+  order positions; not yet listened to on this port.
 - **2026-08-05** — More `source_shared` changes, all of which land here too. The HUD was never drawn:
   `currentViewSize` was pinned at 0, which draws no status bar, and in HD `ChangeViewSize` returned
   early so F9/F10 could not change it either (and jammed after one press). `MaxViewSize()` now caps HD
@@ -181,6 +190,13 @@ than convenient.
   it leaves unused. Its wait loop pumps frames now rather than sitting in `Wait(10)` — worth noting
   here because an unrepainted window is more visible on Windows, where the compositor is happy to
   hand back a stale surface. Verified on macOS only.
+- **2026-08-06** — `source_shared`, so it lands here too: the mission briefings' fade-outs can be cut
+  short with a keypress now. Every other ramp on those pages already snapped; the fade to black
+  between pages was the engine's `VI_FadeOut`, which tests no input, so the press that turned the page
+  was followed by 64 unskippable ticks. A briefing-local `BriefingFadeOutPage()` replaces the seven
+  `VI_FadeOut` calls inside `MissionBriefing`; `VI_FadeOut` itself is unchanged, which matters here
+  because the intro and menus on this port lean on it too. Verified on macOS only — but note the
+  briefings are still on this port's untested list below, and `-nointro` cannot reach them.
 
 ---
 

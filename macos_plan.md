@@ -339,6 +339,34 @@ Also fixed, unrelated to word size:
   500ms during the map 0 briefing, driven by a temporary `-brieftest` parm calling `newplayer(0,0,2)`
   from `startup()`. Before, with the fix disabled by env var: 57344 bytes at 348ms and **0 for every
   sample after**, out to 10s. After: 36864–73728 bytes, never dry, across the same run.
+- **2026-08-06** — User asks whether the music is supposed to loop. It is, and it did not: the track
+  went silent for good when it ended, until the next `PlaySong`. `Sys_MusicUpdate` passed `loop=1` to
+  `xmp_play_buffer` with a comment reading "the soundtrack repeats until the level changes", but
+  libxmp's `loop` is a **maximum loop count**, not a flag (`player.c`: `if (ret < 0 || (loop > 0 &&
+  fi.loop_count >= loop))`). One pass and it returned `-1`, clearing `music_running`. `loop=0`
+  disables the cutoff. One character, but it took a long detour to be sure it was the *only* change
+  needed, and the detour is the part worth keeping:
+  - The modules are compilations — `SONG0.S3M` is five tracks in one file and `selectsong()` starts
+    maps 0–4 at orders 0/20/37/54/73 — and the order lists carry `0xFF` end markers (at 19/36/53/72/89
+    in `SONG0`). libxmp reads `0xFF` as end-of-song and splits the list into separate *sequences*;
+    DSIK did not. `AUDIO.LIB`'s `player.asm` was extracted from the OMF library and disassembled to
+    settle it: `29e: movb 0x40(%edi,%eax),%al / 2a2: cmpw 0x28(%edi),%ax / 2a6: jae 0x275` — any order
+    `>= NumPatterns` is *skipped*, and playback stops only on running off the end with
+    `ReStart >= OrderLen`, which the S3M importer guarantees by forcing `ReStart = MAXORDERS-1`
+    (`IMPORT.C:941`). The game then restarted it from order 0 (`MODPLAY.C:397-400`), since `pattern`
+    is a one-shot poke applied *after* `dPlayMusic` already started at 0.
+  - **None of which matters**, because the markers are never reached. Every section ends with a `Bxx`
+    position jump back to its own first order — `B00`→0, `B14`→20, `B25`→37, `B36`→54, `B49`→73, each
+    on row 63 of that section's last pattern. The music data loops itself, DSIK followed those jumps
+    (`PB_JUMP`, which `PlaySong` uses for the initial seek), and libxmp follows them too. An
+    intermediate fix that rewrote the order list to emulate DSIK's skip was written, measured to be a
+    behavioural no-op, and removed — it also crashed, because `m->scan_cnt[]` is allocated per order
+    index and sized to that index's pattern, so resliding the list corrupts it.
+  - Verified with a headless harness linking the pinned libxmp, printing `xmp_frame_info.pos`
+    transitions for each `(module, pattern)` pair `selectsong` can produce. With `loop=1`:
+    `73…84 |WRAP-> 73 <play_buffer returned end-of-replay>`. With `loop=0`: the same twelve orders
+    round and round. Every section of every module self-loops; `ENDING.MOD` honours its restart byte
+    of 41.
 - **2026-08-05** — User reports the HUD does not work. It never had: the status bar, ammo, shield,
   inventory and goal readouts are all gated on `currentViewSize`, and size 0 draws none of them. Three
   things kept it there. `SC.screensize` was force-set to 0 in `InitSound` when the screen-size row was
@@ -385,6 +413,24 @@ Also fixed, unrelated to word size:
   The wait loop also pumps frames now instead of `Wait(10)`; `screen` was the visible framebuffer in
   DOS, so nothing here ever had to present, and the page was drawn by the single blit inside
   `VI_SetPalette`. Verified by looking at the rendered page.
+- **2026-08-06** — *Requested:* the mission-briefing fade-*outs* are skippable now, finishing the
+  2026-08-05 entry above. That entry made every ramp on a briefing page snap on a keypress and left
+  one beat that could not: the fade to black between pages, which is the engine's `VI_FadeOut`, whose
+  loop tests no input at all. So the player pressed space to turn the page and then sat through 64
+  ticks with no way out, seven times a briefing. `BriefingFadeOutPage()` is the mirror image of
+  `BriefingFadeInPage` — same 64 steps, same `if (newascii) i=steps;` counter-jump — and replaces the
+  seven `VI_FadeOut` calls inside `MissionBriefing`. `BriefingFadeStep` gained a target-palette
+  argument so the ramp to black can share it. `VI_FadeOut` itself is untouched: the intro, the menus
+  and the end-game screens share it and must not become interruptible.
+  The one thing that is *not* symmetric with the fade-in: this fade begins with a press already
+  latched, the one `BriefingWaitKey` just took to turn the page, so it clears `newascii` on entry or
+  it would snap on its own first step. Nothing downstream wants that press — the Esc test runs before
+  the fade and the next page clears `newascii` anyway.
+  Measured, not argued: scripting presses from inside `Sys_Frame` again and printing the tick at each
+  end of the fade, an untouched fade ran 152→222 and a tap at 177 ended it at 178 — one step later,
+  because the jump lets the final step run. The baseline number is the one that matters most; it is
+  what proves the entry-clear works, since without it every fade would have ended on step 1. Then
+  confirmed by hand in the real game. The end-game fades were considered and deliberately left alone.
 - **2026-08-04** — Added a top-level `.gitignore` (`.DS_Store`, `build/`, `build-*/`, `*.dSYM/`, editor
   dirs), so `git status` shows only real sources. Note what this exposes: **none of `source_macos/` is
   committed yet** — the whole port is still untracked working-tree state on top of the 2022 import.
