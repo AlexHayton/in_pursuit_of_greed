@@ -197,6 +197,16 @@ than convenient.
   `VI_FadeOut` calls inside `MissionBriefing`; `VI_FadeOut` itself is unchanged, which matters here
   because the intro and menus on this port lean on it too. Verified on macOS only — but note the
   briefings are still on this port's untested list below, and `-nointro` cannot reach them.
+- **2026-08-06** — `source_shared`, so it lands here too: inventory cycling moved from Insert/Delete
+  to `[` and `]`. Neither bracket existed in the port — no `SC_` constant, no `build_keymap()` row —
+  so `SC_LBRACKET` 0x1a and `SC_RBRACKET` 0x1b were added alongside the `SDL_SCANCODE_LEFTBRACKET`/
+  `RIGHTBRACKET` mappings, and `bt_invleft`/`bt_invright` repointed at them. The `ASCIINames` tables
+  already held `[` and `]` at those codes, so the drawn help page picks the names up on its own.
+  **SETUP.CFG is version 4 as a result**, and bindings from older files are dropped — same reasoning
+  as the version 3 bump above, and the same reason it is not optional: without it a saved `ckeys`
+  re-pins Insert/Delete and neither port has a key config screen to undo that. Verified on macOS by
+  hexdumping the config across the upgrade (v3 `52 53` -> v4 `1a 1b`); untested on Windows, though
+  nothing in it is platform-specific — the scancodes are the same IBM set-1 values on both.
 
 ---
 

@@ -49,6 +49,8 @@
 #define SC_TILDA                0x29
 #define SC_COMMA                0x33
 #define SC_PERIOD               0x34
+#define SC_LBRACKET             0x1a
+#define SC_RBRACKET             0x1b
 #define SC_F1                   0x3b
 #define SC_F2                   0x3c
 #define SC_F3                   0x3d

@@ -132,8 +132,8 @@ int scanbuttons[NUMBUTTONS] =
  SC_HOME,          // bt_centerview
  SC_A,             // bt_slideleft    (was SC_COMMA)
  SC_D,             // bt_slideright   (was SC_PERIOD)
- SC_INSERT,        // bt_invleft
- SC_DELETE,        // bt_invright
+ SC_LBRACKET,      // bt_invleft      (was SC_INSERT)
+ SC_RBRACKET,      // bt_invright     (was SC_DELETE)
  };
 
 

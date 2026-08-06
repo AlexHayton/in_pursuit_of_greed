@@ -70,6 +70,8 @@ static void build_keymap(void)
     sdl_to_dos[SDL_SCANCODE_GRAVE]        = SC_TILDA;
     sdl_to_dos[SDL_SCANCODE_COMMA]        = SC_COMMA;
     sdl_to_dos[SDL_SCANCODE_PERIOD]       = SC_PERIOD;
+    sdl_to_dos[SDL_SCANCODE_LEFTBRACKET]  = SC_LBRACKET;
+    sdl_to_dos[SDL_SCANCODE_RIGHTBRACKET] = SC_RBRACKET;
     sdl_to_dos[SDL_SCANCODE_MINUS]        = SC_MINUS;
     sdl_to_dos[SDL_SCANCODE_EQUALS]       = SC_PLUS;
 

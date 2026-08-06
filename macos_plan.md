@@ -431,6 +431,25 @@ Also fixed, unrelated to word size:
   because the jump lets the final step run. The baseline number is the one that matters most; it is
   what proves the entry-clear works, since without it every fade would have ended on step 1. Then
   confirmed by hand in the real game. The end-game fades were considered and deliberately left alone.
+- **2026-08-06** — *Requested:* inventory cycling moved off Insert/Delete onto `[` and `]`. Those keys
+  did not exist anywhere in this port: no `SC_` constants and no row in `build_keymap()`, so SDL's
+  bracket events mapped to scancode 0 and were dropped. Added `SC_LBRACKET` 0x1a / `SC_RBRACKET` 0x1b
+  — which the `ASCIINames`/`ShiftNames` tables in `D_ints.c` were already carrying `[`/`{` and `]`/`}`
+  for, so the help page names them and the message prompt types them with no further change — mapped
+  them in `sys_input.c`, and repointed `bt_invleft`/`bt_invright` in `scanbuttons[]`.
+  The part that is not the obvious edit: **SETUP.CFG is version 4 now.** Changing a default binding
+  achieves nothing on its own, because `InitSound` copies `SC.ckeys` back over `scanbuttons[]` and a
+  saved file would pin Insert/Delete forever — the same trap the version 3 entry above documents, and
+  still no key config screen anywhere to undo it. The `setupversion>=3` gate became `>=4`. Dropping a
+  v3 file's whole `ckeys[]` rather than migrating the two slots costs nothing in practice: with no
+  config screen, every value ever written there is a compiled-in default from whichever build wrote
+  it, never the player's choice.
+  Verified by hexdump across the upgrade: the live `SETUP.CFG` went from version 3 with `ckeys[12..13]`
+  = 0x52,0x53 to version 4 with 0x1a,0x1b, the rest of the file unchanged. Behaviour in game confirmed
+  by the user. Worth recording for next time: **`osascript`/System Events keystrokes do not reach the
+  SDL window** — tried against both the raw binary and the `open`-launched bundle, with `Greed`
+  confirmed frontmost, and the `gimme` cheat used as a control never fired. Scripting presses from
+  inside `Sys_Frame`, the way the briefing-fade entry above did it, remains the only thing that works.
 - **2026-08-04** — Added a top-level `.gitignore` (`.DS_Store`, `build/`, `build-*/`, `*.dSYM/`, editor
   dirs), so `git status` shows only real sources. Note what this exposes: **none of `source_macos/` is
   committed yet** — the whole port is still untracked working-tree state on top of the 2022 import.

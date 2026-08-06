@@ -63,10 +63,13 @@ static int DVolume[MAXSOUNDDIST];   /* 0..63 by squared distance */
    has no key config screen -- SETUP.EXE was where the DOS game did that -- so
    ckeys read back from an older file would pin the old binding forever, and
    there would be no way to reach the new one.  setupversion is 0 when no file
-   was loaded at all. */
+   was loaded at all.
+
+   Version 4 moved inventory cycling off Insert/Delete onto [ and ], for the
+   same reason and with the same consequence. */
 
 #define SETUP_MAGIC   0x44454247UL   /* 'GBED' little-endian */
-#define SETUP_VERSION 3
+#define SETUP_VERSION 4
 
 unsigned int setupversion;
 
@@ -245,13 +248,15 @@ void InitSound(void)
 
  MusicSwapChannels=SC.inversepan;
 
- /* Bindings from a file written before version 3 are dropped, not applied: the
-    A.S.S. cam default moved from C to V there, and C became the motion sensor.
-    Honouring the old ckeys would leave C doing both at once, with no key config
-    screen anywhere in this port to undo it.  Everything else in the file is
-    still the player's.  The defaults are copied back into SC so the next
-    SaveSetup writes them out and this only happens once. */
- if (setupversion>=3)
+ /* Bindings from a file written before version 4 are dropped, not applied.  At
+    version 3 it was the A.S.S. cam default moving from C to V, which left C
+    doing that and the motion sensor at once; at version 4 it is inventory
+    cycling moving from Insert/Delete to [ and ].  Either way there is no key
+    config screen anywhere in this port to undo a stale binding with, so the old
+    ckeys would pin it forever.  Everything else in the file is still the
+    player's.  The defaults are copied back into SC so the next SaveSetup writes
+    them out and this only happens once. */
+ if (setupversion>=4)
   {
    scanbuttons[bt_run]=SC.ckeys[0];
    scanbuttons[bt_jump]=SC.ckeys[1];
