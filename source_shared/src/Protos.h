@@ -483,6 +483,14 @@
 #define MAXSTARTLOCATIONS 8
 #define MAXCHARTYPES      6
 #define MAXVIEWSIZE       10
+/* The largest view size HD can apply.  0..3 are all 320x200 in viewSizes[] and
+   only vary the status bar chrome drawn over the view; 4 and up shrink the view
+   itself, which HD cannot do -- it renders at the display's own resolution.
+   See ChangeViewSize (Utils.c). */
+#define MAXHDVIEWSIZE     3
+/* Largest size the player can currently reach, for the F9/F10 handlers and for
+   clamping a value read out of SETUP.CFG. */
+#define MAXUSERVIEWSIZE   (hdmode ? MAXHDVIEWSIZE : MAXVIEWSIZE-1)
 
 typedef struct SoundCard_s
  {
@@ -589,7 +597,7 @@ extern longint  frames, keyboardDelay, wallanimationtime, spritemovetime, Switch
 		weapdelay, secretdelay, RearViewTime, RearViewDelay, netsendtime, 
 		specialeffecttime;
 extern byte     *backdrop;
-extern byte     *backdroplookup[256];
+extern byte     *backdroplookup[256<<2];
 extern int      turnrate, MapZoom, mapmode, viewSizes[20], viewLoc[20], goalitem,
 		changelight, lighting, specialeffect, oldgoalitem,
 		headmove[MAXBOBS], weapmove[MAXBOBS], pmaxshield[MAXCHARTYPES],
@@ -629,6 +637,14 @@ void       DemandLoadMonster(int lump,int num);
 void       KillSprite(scaleobj_t *sp,int weapon);
 void       LoadNewMap(int lump);
 void       loadweapon(int n);
+/* Swap the active art set; follows the renderer mode.  See Utils.c. */
+void       RF_SetArtMode(int hd);
+void       RF_ReloadArt(byte *wasresident);
+/* Assemble the sky from its two half-height lumps; see Utils.c. */
+void       LoadBackdrop(int lump);
+extern int skylump;
+/* Rewrite index 255 to 0 in a sprite lump; see Spawn.c. */
+void       PatchSpriteLump(void *lump);
 void       ChangeViewSize(byte MakeLarger);
 void       heal(int n);
 void       medpaks(int n);

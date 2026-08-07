@@ -640,9 +640,6 @@ void LoadScript(int lump,bool newgame)
    DemandLoadMonster(loadsprites[x],loadspritesn[x]);
    UpdateWait();
    }
- lseek(cachehandle,infotable[eventlump].filepos+8,SEEK_SET);
- read(cachehandle,backdrop,256*128);
- lseek(cachehandle,infotable[eventlump+1].filepos+8,SEEK_SET);
- read(cachehandle,backdrop+256*128,256*128);
+ LoadBackdrop(eventlump);
  Event(0,false);
  }

@@ -219,9 +219,29 @@ void InitSound(void)
    else printf("Success\n");
    }
 
- /* The screen size slider is gone from the options menu, so nothing can undo a
-    non-zero value carried in from an older SETUP.CFG.  Full view, always. */
- SC.screensize=0;
+ /* The screen size slider is gone from the options menu, so this was pinned to
+    0 to stop a stale SETUP.CFG value stranding the player at a size nothing
+    could undo.  That also pinned away the status bar, which is the same
+    setting: F9/F10 in play are the control now, so a bad value is recoverable
+    and only the range needs enforcing.  hdmode is not established yet -- the
+    renderer is built later, from SC.hdmode -- so clamp against that. */
+ if (SC.screensize<0) SC.screensize=0;
+ if (SC.screensize>MAXVIEWSIZE-1) SC.screensize=MAXVIEWSIZE-1;
+ if (SC.hdmode && SC.screensize>MAXHDVIEWSIZE) SC.screensize=MAXHDVIEWSIZE;
+
+ /* TEMPORARY -- test hook, like GREED_SHOT in sys_main.c.  GREED_MODE=original
+    or =hd forces the renderer mode without touching SETUP.CFG, which is what
+    makes an automated original-vs-HD comparison possible: the shipped
+    SETUP.CFG predates the magic header, so LoadSetup rejects it and the
+    defaults above always win.  Remove once the port is settled. */
+ {
+  const char *mode=getenv("GREED_MODE");
+  if (mode)
+   {
+    if (!stricmp(mode,"original")) SC.hdmode=0;
+    else if (!stricmp(mode,"hd")) SC.hdmode=1;
+   }
+ }
 
  MusicSwapChannels=SC.inversepan;
 

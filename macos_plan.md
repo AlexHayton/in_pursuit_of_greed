@@ -694,7 +694,8 @@ for `version <= SETUP_VERSION` and reads only the bytes the file has; `InitSound
 defaults **before** calling it. Verified with a synthetic v1 file: `musicvol`/`sfxvol` survived, the
 new tail took its defaults, and bad magic / future version / oversized struct all still fall back.
 
-`SC.screensize` is forced to 0 on load — see 6c.
+`SC.screensize` is clamped on load — see 6c. It *was* forced to 0, which together with a blanket HD
+guard in `ChangeViewSize` made the status bar unreachable at every view size; see 6h.
 
 ### 6c — Display options on the options menu (**done**, 2026-08-04)
 
@@ -706,7 +707,9 @@ preview's bevel.
 The **screen size** slider was removed and its space reused. It was a 1995 way to buy frame rate by
 rendering less of the view, and it was already broken below full size — `RF_BlitView` (`D_video.c`)
 copies a fixed 320×200 and ignores `windowWidth`/`windowHeight`, unlike the DOS original in
-`RA_DRAW.ASM`. Its row plus the blank strip below is repainted by `MenuShowOptions` and relabelled as
+`RA_DRAW.ASM`. (Note that the same setting also chooses how much *status bar* is drawn, which is not
+obvious from the label and is why removing the slider removed the HUD — see 6h. F9/F10 in play are
+the control now.) Its row plus the blank strip below is repainted by `MenuShowOptions` and relabelled as
 three drawn rows:
 
 | index | row | control |
@@ -936,9 +939,40 @@ rather than a live bug; it has not been reproduced from legitimate movement.
 **Known limits:**
 - The 320x200 chrome is stretched to the window, so at a wide aspect the weapon and status bar are
   proportionally wider than the artwork intends.
-- `Display.c` writes index 0 to *erase* HUD elements (an indicator light going out). In HD those read
-  as transparent rather than black. Only reachable at HUD levels >= 1.
+- ~~`Display.c` writes index 0 to *erase* HUD elements (an indicator light going out). In HD those read
+  as transparent rather than black. Only reachable at HUD levels >= 1.~~ Fixed in 6h: the status bar
+  lump is redrawn every frame at those levels, so the erase was never needed and the "off" branch is
+  gone rather than converted.
 - A live window resize keeps the HD resolution chosen for the old size until the next menu exit.
+
+### 6h — The status bar, restored (**done**, 2026-08-07)
+
+Reported as "the HUD doesn't work". It did not: no view size and no key produced a status bar, and
+three of the pieces that draw into one would not have rendered if it had. Full write-up in
+`windows_plan.md`; the change is entirely in `source_shared/`, so it applies here identically. In
+brief:
+
+- **Two independent stops on the same setting.** `SC.screensize` was pinned to 0 in `Modplay.c` (6b/6c)
+  and `ChangeViewSize` refused every size in HD. But `viewSizes[]` makes sizes 0..3 *all* 320×200 —
+  they do not resize the view, they only vary how much status bar is drawn over it, which composites
+  at any resolution. HD now refuses `>= 4` only (`MAXHDVIEWSIZE`) and the setting is clamped, not
+  pinned. Same lesson as the sky: a disabled HD path is a bug, not a fix.
+- **`newplayer`'s restore never worked.** The DOS loop `for (i=0;i<currentViewSize;i++)
+  ChangeViewSize(true);` has the counter's own target as its bound, so it climbs to the smallest view.
+  Inert while the size was always 0; live the moment it was not. Walks to `SC.screensize` now, which
+  also applies a saved size at level start rather than only after a menu visit.
+- **The `...1` family had writes converted and reads left behind.** `displaystats1` tested the meter
+  marker with raw pixel reads against logical write coordinates, so no meter filled at hudscale 4;
+  `displaysettings1`'s three lights were raw `memset`s landing off the bar entirely. The `...2` family
+  (sizes 5..9) was already correct, which is why this went unnoticed — nothing reached `...1`.
+- **The automap segfaulted at every view size.** `displayarrow` went through `VI_HudPut` while its only
+  caller passes `hudWidth/2`, `hudHeight/2` — pixels — so the write landed past the end of
+  `hudylookup[]`. Another instance of the two-units trap below.
+- **`displayheatmode`/`displaymotionmode` drew a logical border round pixel contents**, so a 66×66
+  frame surrounded a 64×64 patch stuck in its corner.
+
+Verified by framebuffer dump and scripted keys at hudscale 4 and, with the art pack moved aside, at
+hudscale 1.
 
 ---
 
@@ -1006,3 +1040,140 @@ Two findings from that port are worth reading back into this one:
   resolver ever saw them and normalised them. On Windows they parse as valid absolute paths and
   bypassed the fix entirely. Worth remembering before adding any other short-circuit to
   `sys_files.c`.
+
+---
+
+# 4× texture pack (Real-ESRGAN)
+
+`tools/hdtex/` builds an optional sidecar archive holding the game's art upscaled 4× by Real-ESRGAN
+and requantized to the original 256-colour VGA palette. The renderer picks the art set from the
+existing `RENDERER` option: **ORIGINAL uses the original lumps, HD uses the upscaled ones.** With no
+sidecar present the game behaves exactly as before, and original render mode on original art is
+byte-identical to the pre-change build.
+
+It ships as five files, `greed_final/GREED_HD.001.BLO` … `.005.BLO` of about 43 MB each, because
+GitHub refuses a blob over 100 MB and the whole pack is 209 MB. `CA_OverlayArt` merges any number of
+parts, and each part is simply a partial pack over the full lump number space — size 0 means "not
+mine" — so an incomplete set still loads and falls back to the original art for whatever is absent.
+An undivided `GREED_HD.BLO` is still loaded if present; `pack.py --part-mb 0` writes one.
+
+## Why the engine needed changing at all
+
+Texture space *was* world space. `TILESHIFT 6` means a 64-unit tile, and the engine indexed a
+64-texel wall with a world coordinate directly — `texture&=63`, `wallposts+(w<<6)`, and the flat
+lookup `((mr_yfrac>>(FRACBITS-6))&(63*64))+((mr_xfrac>>FRACBITS)&63)`. `TILESHIFT` stays 6; what
+changed is that texel indices now scale by `texscaleshift` (log2 texels per world unit, 0 or 2).
+
+Five runtime globals in `R_public.c`, set from the sidecar header by `CA_SetArtMode`:
+`texshift/texscaleshift/texmask` for walls, `flatshift/flatscaleshift/flatmask` for flats,
+plus `spriteshift` and `hudscale`. Walls and flats are kept separate so a partial pack — which is how
+this was built and tested — describes only what it actually contains.
+
+## The two traps
+
+**`scale` and `sp_fracstep` were the same number.** In `DrawWall`, `DrawSteps` and `DrawDoorPost`,
+one variable served as both the geometry step (world units per screen row, projecting ceiling and
+floor) and the texture step (texels per screen row), and the code used them interchangeably —
+`sp_frac+=(scrollmin-topy)*scale` is a texture prestep wearing the geometry name. They diverge by 4×
+with an HD pack. This is the change most likely to be wrong and invisible to reasoning; it shows up
+as walls stretched exactly 4× vertically.
+
+**Swapping art mid-game is not `LoadTextures`.** `LoadTextures` is a level-transition routine: it
+frees every demand-loaded monster and reloads only the player's, assuming sprites get respawned
+right after. Called from the art switch it leaves every live monster's `scaleobj_t` pointing at a
+freed lump and the next `RenderSprites` walks into it. `RF_ReloadArt` (`Utils.c`) does only the
+narrow thing — re-cache walls and flats, rebuild `wallposts` — and `BuildWallPosts` is factored out
+of `LoadTextures` for it. `UpdateWait` also needed a `waiting &&` guard: `waitpics[]` is a
+zero-initialised static that only `StartWait` fills, so any caller outside a StartWait/EndWait pair
+dereferenced NULL.
+
+## Format notes
+
+The sidecar is a lump-number-parallel overlay: same entry count as `GREED.BLO`, `size==0` meaning
+"not overridden". It has to be addressed by number because the wall, flat and sprite lumps are
+**unnamed** — only 244 markers and menu items carry names. The merge happens at the directory level
+in `D_disk.c` (~40 lines) rather than threading an archive id through `CA_CacheLump`/`CA_ReadLump`/
+`CA_FreeLump`, which would touch ~40 call sites. The sidecar's own `nameofs` fields are all zero, so
+they must be overwritten from the original table or `door_1` — a *named wall lump* — stops resolving
+and `RF_PreloadGraphics` dies.
+
+Wall lumps keep the 130-byte header verbatim. `collumnofs[64]` has been vestigial since 1995
+(`Utils.c` recomputes it), so widening it would only force `base = wall + 65*2` and `size = *wall*4`
+to change for nothing; `height` still means rows/4, so `sp_loopvalue` and `span_p->light` come out
+right with no edit.
+
+## Also fixed along the way
+
+- `LoadTextures` read `textures[256..262]` — seven bytes off the end of a `char[256]` on the stack,
+  because `numwalls` is 263 (`endwalls-startwalls` counts the marker). Wall demand-loading is gone
+  entirely; the full set is 27 MB at 4×, and caching it removes the hand-maintained animation-group
+  fixups and the uninitialised-`wallposts` class of bug with it.
+- `wallposts` is `calloc` now, and `read()` returns are checked in `D_disk.c` — a short read on a
+  345 KB lump is silent corruption rather than one glitched texture.
+- `mr_xstep`/`mr_ystep` are computed exactly in HD. `xscale=FIXEDDIV(viewsin,SCALE)` collapses to an
+  integer divide because `SCALE` is `proj<<FRACBITS`, keeping ~7 bits at an HD projection; the lost
+  ulp accumulates across the row because the contiguous-span path never resets `mr_xfrac`. ~5 texels
+  of floor shear at 1574 columns, and 4× art multiplies the visible error by four. Original mode
+  keeps the historical expression, so it stays byte-identical.
+
+## Status
+
+All five classes ship: 262 walls, 232 flats, 1508 sprites, 136 pics, 3 fonts, in a 209 MB sidecar.
+Sprites and fonts needed widened lump layouts (`scalepichd_t`, `fonthd_t`) because `collumnofs`,
+`top`/`bottom` and `charofs` all overflow at 4x; the 2D chrome grew to 1280x800 behind `hudscale`,
+with the blit primitives scaling 320x200 logical coordinates on the way in so no call site moved.
+
+**Not everything should go through the network.** Real-ESRGAN has no notion of a letterform and
+the game's text is 6 pixels tall, so it destroyed both the font lumps and the text baked into
+full-screen pics -- the help screen read `VERPON SELECTION`, `LEPTSHIFT`, `SPADE BAR`. Fonts are
+now EPX/Scale2x only (`tools/hdtex/pixelart.py`) and pics take EPX at hard edges and the model
+everywhere else. EPX copies each output pixel from an input neighbour instead of blending, which
+is the property that matters here: the output value set is a subset of the input's, so nothing
+can land on an index the source never used.
+
+Three classes of bug are worth carrying forward, all written up in `windows_plan.md`: **palette
+indices that carry meaning rather than colour** (the status bar's meter markers, and `font2`/`font3`,
+whose bytes are indices outright because they are always drawn with `fontbasecolor=0` -- naive
+upscaling put 35% and 48% of their pixels on indices absent from the source), **chrome coordinates
+arriving in two different units** (logical from most callers, chrome pixels from anything computed
+against `hudWidth`/`hudHeight`), and **art whose content is glyphs**, above.
+
+The backdrop/sky is 4x as well (a 1024-square buffer behind `skyshift`, with
+`backtangents` keeping two more bits so the horizontal detail is real rather than
+a fourfold replication). The 39 FLI cutscenes are also re-encoded offline by
+`tools/hdtex/fli.py`, since there is no upscaling them at run time, but at **2x
+to 640x400** rather than 4x, and with NVIDIA's NGX VSR rather than Real-ESRGAN.
+`Playfli.c` was hardcoded to 320x200 in four places despite reading its own
+header; it now uses `header.width`/`height` throughout, and `VI_BlitLogical`
+point-samples in both directions, so the same 640x400 file doubles into HD
+chrome and reduces into the original renderer's 320x200.
+
+That upscaler is **Windows-only** -- it needs an NVIDIA GPU, and this port has
+none. The movies are ordinary generated data in `greed_final/MOVIES/` and the
+engine cannot tell what produced them, so macOS either takes the files built on
+Windows or rebuilds them with `make_fli.py --backend esrgan`. Everything else in
+`tools/hdtex` still runs here through MPS. The reasoning behind the switch, and
+the limited-range clamp in ngx-vsr that had to be worked around first, is in
+`windows_plan.md` under "The backdrop and the cutscenes".
+
+## Test hooks
+
+`GREED_MODE=original|hd` forces the renderer mode (the shipped `SETUP.CFG` predates the magic header,
+so `LoadSetup` rejects it and the built-in default always wins). `GREED_FLIP=<ticks>` toggles the
+mode at given ticks, which is the only way to exercise the live art swap without driving the menu by
+hand. `GREED_MAP=<n>` starts a new game on that map — the sky exists on only 13 of the 32 and none of
+the first eight, so `GREED_MAP=27` is how you see it at all. `GREED_SKYTEST=1` paints a one-texel
+checker over the backdrop, which is the only unambiguous way to tell a sky that genuinely gained
+resolution from one replicating the same 256 columns four times. All temporary, alongside
+`GREED_SHOT`.
+
+For the cutscenes specifically, note that `-nointro` returns out of `MissionBriefing` before any FLI
+plays (`if (netmode || nointro) return;`), so any harness that passes it — `shots.ps1` does — proves
+nothing about that path. `introshot.ps1` on the Windows side exists for exactly this reason.
+
+`GREED_KEYS=<tick>:<scancode>[:<hold>],...` injects scancodes into `keyboard[]` from `Sys_Frame`,
+after `Sys_RefreshKeys` has rebuilt it. The menus are keyboard-driven and neither platform lets a
+script-launched window take focus, so without this the menu dialogs cannot be reached in an
+automated run at all — which is how a trail bug in the sliding QUIT and PAUSE boxes went unnoticed
+through the whole HD chrome conversion. It holds each key over a span of ticks because
+`MenuCommand` edge-detects Enter and rate-limits the arrows against `timedelay`.

@@ -470,3 +470,412 @@ A DOSBox run of `greed_final/GREED.EXE` remains the reference for palette and ge
 Networked multiplayer (`Net.c` compiles but stays disabled — it is IPX/serial), the DOS-only tools,
 an icon, an installer, code signing, a GUI subsystem, and an ARM64 Windows slice. The last would be a
 small change now that both dependencies build from source, but it is untried.
+
+---
+
+# Upscaled art: 4× textures (Real-ESRGAN), 2× cutscenes (NVIDIA VSR)
+
+Everything here is under `source_shared/`, so it applies to both ports. The design rationale,
+the two traps and the incidental fixes are written up in **[`macos_plan.md`](macos_plan.md)**; this
+section covers running the pipeline on Windows and what is left to do.
+
+The cutscene half is Windows-only: it needs an NVIDIA GPU, so macOS either takes the movies built
+here or rebuilds them with `make_fli.py --backend esrgan`.
+
+## Running it
+
+```powershell
+cd tools\hdtex
+.\setup.ps1                                   # venv + torch + weights + NVEncC
+.\.venv\Scripts\python roundtrip.py           # prove the codecs first
+.\.venv\Scripts\python nvvsr.py --selftest    # prove the VSR colour path
+.\.venv\Scripts\python make_hd.py --all       # extract -> upscale -> pack
+.\.venv\Scripts\python make_fli.py            # cutscenes, ~20 min
+```
+
+`setup.ps1` pins the interpreter to a version torch actually ships wheels for. `py -3` picks the
+newest *registered* CPython, which on this machine is a 3.15 alpha with no torch wheel on any index —
+the failure looks like "no matching distribution for torch" and is easy to misread as a bad CUDA
+index. 3.13 + cu124 is what works here.
+
+`realesrgan` and `basicsr` are deliberately not dependencies: `basicsr` imports
+`torchvision.transforms.functional_tensor`, removed in torchvision 0.17, and neither package is
+maintained. `rrdbnet.py` vendors the ~120 lines of model definition and loads the official `.pth`
+directly.
+
+Iterate on one class with `--only flat`, swap models with `--model x4plus_anime`, and look at the
+result with `contact_sheet.py <class>` before packing. For the cutscenes the equivalent is
+`fli_compare.py --only CITYBURN`, which puts every backend side by side on the same frames after
+requantization — the only fair comparison, since the palette is fixed by the format and how
+gracefully an upscaler survives being squeezed back into it is most of what matters.
+
+## Verifying
+
+`tools\hdtex\shots.ps1 <tag>` captures framebuffer dumps in **both** render modes via `GREED_SHOT`
+(neither platform allows an ordinary screenshot — see `CLAUDE.md`). Compare hashes against a `base`
+tag captured from the pre-change build:
+
+```powershell
+.\shots.ps1 base        # then make changes, rebuild
+.\shots.ps1 stage3
+```
+
+Original mode on original art must stay byte-identical through every stage that claims to be a
+no-op. It did for the plumbing, the loader hardening and the archive overlay.
+
+`shots.ps1` passes `-nointro`, which returns out of `MissionBriefing` before a single FLI plays, so
+it proves nothing whatever about the cutscenes. **`introshot.ps1 <tag>`** is the one for those: same
+`GREED_SHOT` mechanism, no `-nointro`. `DemoIntro` hands straight to `DemoIntroFlis` when
+`MOVIES/TEXT.FLI` exists (`Intro.c:477`), and TEXT.FLI is 390 frames at speed 5 — 1950 ticks — so
+the default `-At 300,700,1100,1500` all land inside it. This is what showed that ESRGAN had erased
+the starfield: a contact sheet suggested it, the framebuffer dump proved it.
+
+**`GREED_KEYS=<tick>:<scancode>[:<hold>],...`** injects scancodes into `keyboard[]`, because the
+menus are keyboard-driven and a script-launched window cannot take focus — so dialogs like
+`ShowQuit` were simply unreachable in an automated run, which is why the trail bug survived. It
+holds the key down over a window of ticks rather than pulsing it, since `MenuCommand` edge-detects
+Enter and rate-limits the arrows. `quitshot.ps1 <tag>` uses it to reach the QUIT dialog:
+`-nointro` starts *in* a game, not at the menu, so the sequence is Esc (`0x01`) to open the menu,
+DownArrow (`0x50`) onto QUIT, Enter (`0x1c`).
+
+Note `hudscale` follows whether the HD pack loaded, **not** `GREED_MODE` — that only sets the 3D
+view resolution. To test the hudscale-1 path, move `greed_final/GREED_HD.*.BLO` aside; a
+`GREED_MODE=original` run with the pack present is still hudscale 4 and proves nothing about it.
+
+Note `build.ps1` writes progress to stderr, so `2>&1` turns a successful build into a PowerShell
+`NativeCommandError` and a false failure. Don't redirect it. (`Join-String` is also absent — this is
+Windows PowerShell 5.1, not 7.)
+
+## Status
+
+| class | count | pipeline | engine |
+|---|---|---|---|
+| walls | 262 | OK | OK 256x512 / 256x256 |
+| flats | 232 | OK | OK 256x256 |
+| sprites | 1508 | OK | OK widened layout, `spriteshift` |
+| pics | 136 | OK ESRGAN + EPX on edges | OK `hudscale`, 1280x800 chrome |
+| fonts | 3 | OK EPX only | OK widened `charofs`, `hudscale` |
+| cutscenes | 39 / 5722 frames | OK NGX VSR 2x | OK `VI_BlitLogical`, 640x400 |
+
+All six classes ship. The sidecar is 209 MB across five `GREED_HD.NNN.BLO` parts and the movies
+283 MB; both are committed, so a clone is playable without a GPU. Live switching works in both
+directions (`GREED_FLIP=400,800`), and original render mode on original art is
+byte-identical to the pre-change build throughout.
+
+## The backdrop and the cutscenes
+
+Both are 4x too, and both needed their own treatment.
+
+**The sky** is a 256-square buffer assembled from two 256x128 lumps and *sampled*
+rather than drawn -- wrapped column, scaled row -- so it scales like a flat:
+`skyshift` 0 or 2, `SKYSIZE` 256 or 1024. The subtlety is `backtangents`, which
+maps a view column to a sky column. Shifting its result left by 2 would sample
+only every fourth column, i.e. the same 256 columns replicated with no detail
+gained; it is instead computed with two more bits kept
+(`>>(FRACBITS-skyshift)`), which is where the horizontal resolution actually
+comes from. `BACKDROPHEIGHT` scales for the vertical.
+
+Two things worth knowing. The sky is only visible on 13 of the 32 maps -- the
+first eight have none, so `GREED_MAP=27` (pillars, 2544 sky tiles) is the one to
+test on. And `LoadBackdrop` replaces an `lseek`/`read` straight off
+`cachehandle` at `infotable[lump].filepos+8`; that skipped the pic header, which
+is the only reason it worked, and it reads the *wrong file entirely* once a
+sidecar is loaded, because those lumps then live on the other handle.
+
+**The cutscenes** are 39 FLI files, 5722 frames, which cannot be upscaled at run
+time -- so `tools/hdtex/fli.py` decodes and re-encodes them offline and
+`make_fli.py` puts 640x400 copies in `greed_final/MOVIES/`. The decoder in
+`Playfli.c` was hardcoded to 320x200 in four places (`chunkbuf` at 64000, an
+explicit 320 row stride, and the COPY/BLACK chunk sizes) despite reading
+`header.width`/`height`; it now uses them, and `VI_BlitLogical` takes source
+dimensions so an original and an upscaled movie both fill the screen -- it
+point-samples in both directions, doubling 640x400 into HD chrome and reducing
+it into the original renderer's 320x200.
+
+The upscaler is **NVIDIA NGX DLVSR**, the model behind RTX Video Super
+Resolution, not the Real-ESRGAN the texture pack uses. There is no Python
+binding for it; `tools/hdtex/nvvsr.py` drives it through rigaya's NVEncC, which
+wraps it as `--vpp-resize algo=ngx-vsr` and ships `nvngx_vsr.dll` inside its own
+archive. The other candidate -- the D3D11 video-processor extension that
+Chromium and mpv use for the browser feature -- is documented for 360p-1440p
+input and would have refused 320x200; the offline NGX API takes it happily.
+
+Two things about that path are worth recording because neither is obvious and
+both were measured rather than assumed. **ngx-vsr always emits limited-range
+YUV, whatever `--colorrange` says** -- the flag only tags metadata. Fed
+full-range samples it clamps 0 to 16 and 255 to 235 while leaving mid-tones
+alone, crushing every pure black and white in a cutscene; the first sheets came
+out visibly dark. Feeding limited-range 10-bit 4:4:4 makes the round trip
+exactly lossless. And once that was fixed, **ngx-vsr differs from plain
+`lanczos4` by a mean absolute difference of only about 1.4** -- most of what had
+looked like the model working was the clamp. `nvvsr.py --selftest` now checks
+the colour round trip, a grey ramp for the clamp, and the filter chain NVEncC
+reports, because NVEncC will silently substitute an ordinary resize for a scale
+factor the network does not support.
+
+Encoder notes are in `tools/hdtex/README.md`. Three matter: BRUN and LC use
+*opposite* sign conventions for run-vs-literal and inverting either produces a
+frame that looks almost right; delta compression loses to whole-frame RLE on
+high-motion content, so the writer tries both and keeps the smaller; and because
+the FLI header can only be written at close, an interrupted conversion leaves a
+file with a zeroed signature -- which is why `--resume` validates frame counts
+rather than testing for existence.
+
+The shipped set is **283 MB for all 39 against 43 MB of originals** (5722 frames,
+every one decoded back and validated at 640x400), because the upscaled frames are
+far higher entropy than the dithered art the format was tuned for. The 4x set
+that used to sit beside it is gone; 640x400 is the only size now.
+
+VSR costs about twice what ESRGAN did at the same 2x -- 283 MB against 156 MB,
+and roughly 2x per movie across the board. That is the same fact as the quality
+difference seen from the other side: ESRGAN smooths, so its output RLEs well,
+while VSR preserves the source's dither and banding, which is precisely what the
+FLI encoder cannot compress. Going in, the smaller set looked like an argument
+*for* VSR. It turned out to be the argument against, and it loses:
+
+**ESRGAN deletes fine detail and invents geometry.** On TEXT.FLI -- the intro,
+the one `DemoIntro` probes for -- it erases the entire starfield. Not thinned:
+gone, a pure black background, confirmed in framebuffer dumps from the running
+game, not just in contact sheets. On CITYBURN it restructures the skyline at a
+tight crop, merging towers and losing a thin one into a dark mass. ngx-vsr keeps
+both, at about 17% more lit pixels on the same frame. Hence the cutscenes moved
+to VSR and the texture pack did not.
+
+What a smaller codec is worth, measured over a stratified sample of the old 4x
+set rather than estimated. The ratios still hold; the absolute figures were
+taken at 1280x800 and are kept for the shape of the result:
+
+| | size | vs FLI |
+|---|---|---|
+| upscaled FLI at 4x (former) | 593 MB | - |
+| + deflate-9 whole frames | ~391 MB | 1.5x |
+| + zstd-19 whole frames | ~348 MB | 1.7x |
+| per-frame best of FLI/deflate | ~330 MB | 1.8x |
+| H.264 CRF 18 | ~64 MB | 9.5x |
+
+The interesting result is that general-purpose compression is a poor deal here.
+It only manages 1.5-1.7x, and on the *low*-motion movies (RUBBLE, JETTISON,
+INSHIP04) it is worse than FLI, because compressing whole frames throws away the
+inter-frame delta that FLI's LC chunk exploits. A hybrid picking the smaller per
+frame reaches maybe 1.8x -- for the cost of vendoring a decompressor and adding
+a chunk type. Halving the dimension beat all of it, for free, which is what 2x
+is now doing.
+
+H.264 is the only option that changes the picture, and it is not a drop-in: the
+cutscene path is 8-bit paletted end to end, so it needs a decoder (libavcodec,
+or Media Foundation plus VideoToolbox) and a present path that bypasses `screen`
+and the palette LUT. That last part is also the upside -- it would make the
+cutscenes truecolour rather than 256 indices.
+
+## Things that bit, and why
+
+**The sidecar is split into five files, and a part number is not a flag.** GitHub refuses a blob
+over 100 MB and warns over 50, against a 209 MB pack, so `pack.py` writes `GREED_HD.001.BLO` …
+`.005.BLO` at ~43 MB each and `CA_OverlayArt` merges whatever it finds. No format change was
+needed: a part is just a partial pack over the full lump number space, the shape `--only wall`
+already produced, so any subset loads and the rest falls back to the original art.
+
+What bit was `CA_SetArtMode`. `lumpsrc[]` now records *which file* holds each lump, but that
+function still did `lumpsrc[i]=(byte)hd` when switching art sets — rewriting every part number to
+1. Reads then went to part 1 at offsets belonging to part 3, which is exactly the failure mode that
+does not announce itself: the seek succeeds, the read succeeds, and the bytes are plausible
+garbage. It presented as a hang during `RF_PreloadGraphics` with no error at all. `hdpart[]` holds
+the mapping and `lumpsrc[i] = hd ? hdpart[i] : 0`.
+
+Verified byte-identical: framebuffer dumps at ticks 120 and 300 hash the same for a five-part pack
+and an undivided one, and the runtime art swap (`GREED_FLIP=200,400`) still works both ways.
+
+**`64000` was an alias for "the whole screen", and at 4x it is 1/16th of it.**
+The engine spells the framebuffer size as a literal 64000 in about fifty places.
+`SCREENBYTES` replaced them, but a family of save/restore pairs was missed --
+`ShowQuit`, `ShowPause`, `MenuAnimate`, `StartWait`/`EndWait`, `RunBrief` and
+`MissionBriefing` all stash the chrome with `memcpy(viewbuffer,screen,64000)`
+and put it back afterwards. At hudscale 4 that preserved the top 50 rows and
+abandoned the other 750, so anything drawn over the menu left its art behind.
+
+Worse, the sliding dialogs restore the rows they vacate as they move, and that
+had been *switched off* in HD rather than scaled:
+
+```c
+if (y>=0 && hudscale==1) memcpy(ylookup[y],viewbuffer+320*y,640);
+```
+
+Two rows at a 320 pitch -- right only at hudscale 1. With it disabled the QUIT
+and PAUSE boxes smeared a trail down the screen as they dropped. `VI_DrawMaskedPic2`
+had the same shape of workaround for its masked pixels, `source2=(hudscale==1) ?
+... : NULL`, justified with a comment claiming `screen` already held the right
+background -- true only if nothing had overdrawn it, which is exactly what the
+sliding box does. Both now scale by `screenpitch`/`hudscale` and behave the same
+at hudscale 1, where the expressions reduce to the originals. `RestoreChromeRows`
+in `Menu.c` is the shared helper.
+
+The lesson is the general one for this port: when an HD path was "disabled
+rather than scaled", the guard is the bug, not the fix.
+
+**Sprites, pics and fonts all overflowed their 1995 containers at 4x.** Sprite
+`collumnofs` is int16 with only 256 entries against a needed 704, and per-column
+`top`/`bottom` are bytes against a needed 780; font `charofs` is int16 against
+33506. `hdformats.py` emits widened layouts and `R_refdef.h`/`D_font.h` carry
+`SP_*` / `FN_CHAROFS` accessors that select on `spriteshift`/`hudscale`. The
+decode was open-coded in fifteen places; folding it into accessors first, and
+proving that a no-op, is what made the format change safe.
+
+**Palette indices in the status bar carry meaning, not colour.** The art paints
+index 254 across the meter regions and `Display.c` rewrites 254 -- or a 113..168
+value it wrote previously -- with a gradient from shield/health every frame.
+Upscaling destroyed all 524 marker pixels and invented ~80 spurious ones, so the
+meters would have stopped filling while unrelated pixels flashed. Marker pixels
+are now replicated 4x4 as *indices* and those ranges are excluded from the
+quantizer elsewhere; counts come out at exactly 16x the original.
+
+**Index 0 means transparent in every `VI_DrawMaskedPic` path.** Excluding it from
+the quantizer stops new holes appearing but also destroys the real ones -- the
+weapon rendered inside a black rectangle. Masked pics now get the same
+fill-upscale-remask treatment as sprites.
+
+**Real-ESRGAN cannot upscale a glyph, and fonts were a third instance of the
+palette-indices-carry-meaning trap.** Text is 6 pixels tall at 320x200, below
+anything the model preserves, and it has no notion of a letterform: it blurs
+strokes together and hallucinates into the gaps. Two places were affected.
+
+`_do_font` assumed every font lump held ramp offsets that `FN_RawPrint` adds
+`fontbasecolor` to. That is true of `font1` alone. Every call site selecting
+`font2` or `font3` sets `fontbasecolor=0` (26 of them in `Display.c`), so those
+bytes *are* palette indices -- the lumps hold five and nine distinct values.
+Stretching them to 0..255, running a GAN over them and compressing back produced
+every intermediate value: 35% of `font2`'s upscaled pixels and 48% of `font3`'s
+were indices appearing nowhere in the source, landing in unrelated parts of the
+VGA palette, so green HUD glyphs came out fringed with red, white and grey.
+`font1` had no stray values but its 8 levels have no headroom for the model's
+contrast expansion -- level 1 came out 3x over-represented and 2..6 about 4x
+under, collapsing the shading to a core plus a dark outline.
+
+And the **help screen is a pic, not a font**: `ShowHelp` (`Menu.c:1229`) calls
+`loadscreen("INFO1")` and draws lump 2322 as one full-screen bitmap, no font code
+involved. That text is baked into the art, and the 4x version read `VERPON
+SELECTION`, `LEPTSHIFT`, `DUMP`, `SPADE BAR`. Text on the plain black background
+survived only by accident -- `info1` contains index 0, so it is flagged `masked`
+and the transparency re-cut happened to restore a sharp silhouette there. Over
+the gun artwork nothing saved it.
+
+`tools/hdtex/pixelart.py` adds EPX/Scale2x, which *copies* each output pixel from
+one of five input neighbours, so the output value set is a subset of the input's
+by construction: no quantizer, no interpolation, no stray indices, and index 0
+survives exactly. Fonts are EPX end to end and no longer load a model at all --
+per glyph, because `extract._font_atlas` packs them with no gutter and EPX's 3x3
+window would otherwise pull a neighbouring letter into a glyph's edge columns.
+Pics keep the model for artwork and take EPX only where the source has a hard
+edge (Oklab neighbour delta over `--sharp-threshold`, default 0.30, dilated one
+pixel). The threshold is not delicate: on `info1` coverage is 26.8% at 0.25 and
+26.6% at 0.35, so anything on that plateau gives the same mask. Object
+silhouettes go sharp too, which is wanted -- the model's ringing there was the
+other thing that looked wrong at 4x.
+
+**Chrome coordinates come in two units and mixing them is silent.** Callers pass
+320x200 logical and the blit primitives scale on the way in; but the automap, the
+radar, the rear-view inset and the weapon position compute directly against
+`hudWidth`/`hudHeight`, which are chrome pixels. Scaling those a second time put
+writes thousands of pixels past the end of a row. The rule that emerged: if a
+statement mentions `hudWidth`/`hudHeight`, it is already in pixels and must not
+go through `VI_HudFill`/`VI_HudPut`.
+
+**Switching art sets must restore the working set, not a list of classes.**
+`CA_SetArtMode` frees every overridden lump; re-caching walls and flats by hand
+left 1508 sprite lumps NULL and `DrawSprite` dereferenced one on the next frame.
+`RF_SetArtMode` now snapshots `lumpmain` residency first and restores exactly
+that, re-applying the 255->0 sprite patch on the way. Which monsters are resident
+depends on the level, so nothing else could have reconstructed it.
+
+Debugging note: the crash was found by linking with `/MAP:greed.map` (inject via
+`CMAKE_EXE_LINKER_FLAGS` in the build cache -- write it back **without** a BOM or
+CMake rejects the file) and resolving the Windows Event Log fault offset against
+it. Far quicker than bisecting by inspection.
+
+## The status bar was unreachable, and the parts behind it were half converted
+
+Reported as "the HUD doesn't work". It did not: at no view size and by no key
+was a status bar reachable, and three of the pieces that draw into it would not
+have rendered correctly if it had been.
+
+**`SC.screensize` was pinned to 0 and `ChangeViewSize` refused every size in
+HD.** Two independent stops on the same setting. The pin (`Modplay.c`) was there
+because the options menu lost its screen size slider in 6c, so a stale
+`SETUP.CFG` value could have stranded the player with no way back. The guard
+(`Utils.c`) was there because in HD the render resolution comes from the display
+and `viewSizes[]` cannot drive it.
+
+Both were too broad. `viewSizes[]` says sizes 0..3 are *all* 320x200: they do not
+resize the view at all, they only vary how much status bar chrome is drawn over
+it, which composites at any resolution. Only 4 and up shrink the view. So HD
+refuses `>= 4` now, `MAXHDVIEWSIZE`, and the setting is clamped rather than
+pinned -- F9/F10 in play are the control, so a bad value is recoverable and only
+the range needs enforcing. This is the same lesson as the sky: when an HD path
+was disabled rather than scaled, the guard is the bug.
+
+**`newplayer`'s view size restore cannot restore anything.** The DOS original
+ends its table-rebuild walk with
+
+```c
+for (i=0;i<currentViewSize;i++) ChangeViewSize(true);
+```
+
+whose bound is the counter's own target, so every step raises the bound too and
+it climbs to the smallest view the engine allows. Harmless for thirty years
+because `currentViewSize` was always 0 here; live the moment a non-zero size
+became reachable. It now walks to `SC.screensize`, which also makes a saved size
+take effect at level start rather than only after a visit to the menu. The
+`Menu.c` apply loop got the same treatment: it tests the size `ChangeViewSize`
+may decline to change, so it has to stop on "no movement" rather than spin.
+
+**The `...1` display family had its writes converted and its reads left behind.**
+`displaystats1` writes through `VI_HudPut` (logical) but tested the marker with
+raw `*(hudylookup[i]+j)` (pixels), so at hudscale 4 it sampled (j,i) of a
+1280x800 buffer -- up in the 3D view, never 254 -- and no meter ever filled.
+`VI_HUDPEEK` is the read that pairs with `VI_HudPut`. Exact, because the art
+pipeline replicates marker indices 4x4 as indices; see the note on palette
+indices carrying meaning. The `...2` family (view sizes 5..9) had been converted
+correctly, which is why this survived: nothing reached the `...1` family.
+
+`displaysettings1`'s three indicator lights were raw `memset`s, all three landing
+on row 199 of the 1280x800 buffer rather than on the bar. Their "off" branch is
+now gone rather than converted: at these view sizes the status bar lump is
+redrawn every frame, so the unlit light is already what the art shows, and in HD
+erasing to index 0 -- the chrome layer's transparent key -- punched a hole
+through the bar to the view behind it. That was the "writes index 0 to erase HUD
+elements, only reachable at HUD levels >= 1" limitation noted in `macos_plan.md`;
+it is closed, not merely unreachable.
+
+`displaynetbonusitem1`'s 30x30 portrait copy is the last one, now
+`VI_DrawPicToBuffer` -- `VI_DrawPic` to the chrome target, which is not `screen`
+outside HD.
+
+**Toggling the automap segfaulted, at every view size.** `displayarrow` had been
+converted to `VI_HudPut`, but its only caller passes `hudWidth/2+1`,
+`hudHeight/2+1` -- already pixels. At hudscale 4 the write landed at four times
+the centre of the buffer, past the end of `hudylookup[]`: a wild pointer, not a
+stray pixel. Pixels are the right unit here because the map around the arrow is
+drawn in pixels too, four per tile, so a logical arrow would be twelve pixels
+across a four-pixel grid.
+
+**`displayheatmode` and `displaymotionmode` had the border logical and the
+contents in pixels.** The 66x66 border was drawn four times life size around a
+64x64 patch of cells stranded in its top-left corner. `displaymotionmode` had it
+both ways inside one function -- sprite dots through `VI_HudPut`, the player dot
+raw. Contents follow the border: a cell is a logical pixel, which keeps the
+sensor the same fraction of the screen it was at 320x200.
+
+Verified by reading the framebuffer with `GREED_SHOT` and driving the keys with
+`GREED_KEYS` (`0x43` F9, `0x32` M, `0x23` H): the bar appears at each of levels
+1..3 and each panel draws; the health sweep animates between frames, which only
+the `==254` read can produce; the map and heat lights probe green and red when
+lit and return to the art's unlit grey when not, with no hole; the automap draws
+walls and arrow instead of crashing. Then with `GREED_HD.*.BLO` moved aside --
+the only way to test hudscale 1, since `GREED_MODE=original` with the pack
+present is still hudscale 4 -- levels 4 and 5+ and the `...2` family are correct
+too.
+
+**Known limit, unchanged:** the automap and the heat/motion *map* overlays are
+drawn at chrome-pixel density, so in HD they are a quarter of their original size
+relative to the screen and show four times as many tiles. That is a deliberate
+consequence of the pixel-unit rule above, not a regression; making them logical
+would enlarge them and narrow what they cover.

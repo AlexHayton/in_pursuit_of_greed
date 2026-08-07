@@ -185,8 +185,9 @@ void VI_DrawMaskedPic2(int x, int y, pic_t  *pic)
  byte *dest, *source, *source2;
  int  width, height, xcor;
 
- x -= pic->orgx;
- y -= pic->orgy;
+ /* Logical in, chrome pixels out; see the note in VI_DrawPic. */
+ x=(x-pic->orgx)*hudscale;
+ y=(y-pic->orgy)*hudscale;
  height=pic->height;
  source=&pic->data;
  while (y<0)
@@ -197,24 +198,49 @@ void VI_DrawMaskedPic2(int x, int y, pic_t  *pic)
    }
  while (height--)
   {
-   if (y<200)
+   if (y<SCREENHEIGHT*hudscale)
     {
      dest=ylookup[y]+x;
-     source2=y*320+x+viewbuffer;
+     /* The masked-out pixels come from the background behind the box.  Every
+	caller stashes it with `memcpy(viewbuffer,screen,SCREENBYTES)` first, so
+	viewbuffer holds a copy of the chrome at the chrome's own pitch -- which
+	is screenpitch, not 320.  It was 320 here, correct only at hudscale 1,
+	and the HD path had been disabled rather than scaled: that left the
+	pixels showing whatever the box drew on the previous frame, which is
+	what made a sliding box smear a trail down the screen. */
+     source2=viewbuffer+(size_t)y*screenpitch+x;
      xcor=x;
      width=pic->width;
      while (width--)
       {
-       if (xcor>=0 && xcor<=319 && *source) *dest=*source;
-	else *dest=*source2;
+       if (xcor>=0 && xcor<screenpitch && *source) *dest=*source;
+	else if (source2) *dest=*source2;
        xcor++;
        source++;
-       source2++;
+       if (source2) source2++;
        dest++;
        }
      }
    y++;
    }
+ }
+
+
+static void RestoreChromeRows(int y,int rows)
+/* Repaint `rows` logical rows of the stashed background over the chrome.
+
+   The sliding dialogs vacate rows as they move and rely on this to clear the
+   box art behind them.  Was `memcpy(ylookup[y],viewbuffer+320*y,640)` -- two
+   rows at a 320 pitch -- which is only the chrome's pitch at hudscale 1, so it
+   had been switched off in HD instead of scaled.  With it off the vacated rows
+   keep the previous frame's box and the dialog leaves a trail. */
+{
+ int r, first=y*hudscale, last=(y+rows)*hudscale, max=SCREENHEIGHT*hudscale;
+
+ if (first<0) first=0;
+ if (last>max) last=max;
+ for (r=first;r<last;r++)
+  memcpy(ylookup[r],viewbuffer+(size_t)r*screenpitch,(size_t)screenpitch);
  }
 
 
@@ -232,11 +258,11 @@ bool ShowQuit(void (*kbdfunction)(void))
  byte    *scr;
 
  INT_TimerHook(NULL);
- scr=(byte *)malloc(64000);
+ scr=(byte *)malloc(HUD_MAXWIDTH*HUD_MAXHEIGHT);
  if (scr==NULL) MS_Error("Error allocating ShowQuit buffer");
  MouseHide();
- memcpy(scr,viewbuffer,64000);
- memcpy(viewbuffer,screen,64000);
+ memcpy(scr,viewbuffer,SCREENBYTES);
+ memcpy(viewbuffer,screen,SCREENBYTES);
  MouseShow();
  if (netmode) TimeUpdate();
  lump=CA_GetNamedNum("quit");
@@ -290,7 +316,7 @@ bool ShowQuit(void (*kbdfunction)(void))
      }
    if (timecount>=droptime && y<67)
     {
-     if (y>=0) memcpy(ylookup[y],viewbuffer+320*y,640);
+     if (y>=0) RestoreChromeRows(y,2);
      y+=2;
      droptime=timecount+1;
      VI_DrawMaskedPic2(111,y,pics[anim]);
@@ -318,7 +344,7 @@ bool ShowQuit(void (*kbdfunction)(void))
    if (quitgame) break;
    if (timecount>=droptime)
     {
-     if (y>=0) memcpy(ylookup[y],viewbuffer+320*y,640);
+     if (y>=0) RestoreChromeRows(y,2);
      y+=2;
      droptime=timecount+1;
      VI_DrawMaskedPic2(111,y,pics[anim]);
@@ -331,8 +357,8 @@ bool ShowQuit(void (*kbdfunction)(void))
      VI_DrawMaskedPic2(111,y,pics[anim]);
      }
    }
- memcpy(screen,viewbuffer,64000);
- memcpy(viewbuffer,scr,64000);
+ memcpy(screen,viewbuffer,SCREENBYTES);
+ memcpy(viewbuffer,scr,SCREENBYTES);
  for(i=0;i<3;i++) CA_FreeLump(lump+i);
  MouseShow();
  free(scr);
@@ -361,13 +387,13 @@ void ShowMenuSliders(int value,int range)
   {
    c=(a*32)/d + 140;
    for(i=49;i<65;i++)
-    *(ylookup[i]+a+42)=c;
+    VI_HudPut(ylookup,a+42,i,c);
    }
  if (d<49)
   for(a=d;a<49;a++)
    {
     for(i=49;i<65;i++)
-     *(ylookup[i]+a+42)=0;
+     VI_HudPut(ylookup,a+42,i,0);
     }
  MouseShow();
  }
@@ -437,8 +463,7 @@ void ShowSaveDir(void)
   {
    printx=148;
    printy=34+i*10;
-   for(j=0;j<6;j++)
-    memset(ylookup[printy+j]+printx,0,110);
+   VI_HudFill(ylookup,printx,printy,110,6,0);
    FN_Printf(savedir[i]);
    }
  MouseShow();
@@ -477,8 +502,7 @@ static void MenuShowOptionValue(char *value)
 {
  int i;
 
- for(i=29;i<80;i++)
-  memset(ylookup[i]+35,0,64);
+ VI_HudFill(ylookup,35,29,64,51,0);
  fontbasecolor=228;
  font=font1;
  printx=35+(64-FN_RawWidth(value))/2;
@@ -498,12 +522,12 @@ void MenuDrawCursorBox(void)
  w=cursors[menulevel][menucurloc].w;
  h=cursors[menulevel][menucurloc].h;
  if (!w || !h) return;
- memset(ylookup[y]+x,133,w);
- memset(ylookup[y+h-1]+x,133,w);
+ VI_HudFill(ylookup,x,y,w,1,133);
+ VI_HudFill(ylookup,x,y+h-1,w,1,133);
  for(i=y;i<y+h;i++)
   {
-   *(ylookup[i]+x)=133;
-   *(ylookup[i]+x+w-1)=133;
+   VI_HudPut(ylookup,x,i,133);
+   VI_HudPut(ylookup,x+w-1,i,133);
    }
  }
 
@@ -514,8 +538,7 @@ void MenuShowOptions(void)
 
  MouseHide();
 
- for(i=OPTPANEL_Y;i<OPTPANEL_Y+OPTPANEL_H;i++)
-  memset(ylookup[i]+OPTPANEL_X,1,OPTPANEL_W);
+ VI_HudFill(ylookup,OPTPANEL_X,OPTPANEL_Y,OPTPANEL_W,OPTPANEL_H,1);
  MenuDrawOptionRow(105,"RENDERER",SC.hdmode ? "HD" : "ORIGINAL");
  MenuDrawOptionRow(116,"FULLSCREEN",SC.fullscreen ? "ON" : "OFF");
  MenuDrawOptionRow(127,"CAMERA DELAY","");
@@ -803,7 +826,7 @@ void GetSavedName(int menucursor)
    printx=148;
    printy=34+menucursor*10;
    for(i=0;i<6;i++)
-    memset(ylookup[printy+i]+printx,0,100);
+    VI_HudFill(ylookup,printx,printy+i,100,1,0);
    FN_Printf(savedir[menucursor]);
    while (!newascii && !quitgame)   // wait for a new key
     {
@@ -1041,7 +1064,7 @@ void MenuAnimate(void)
  longint waittime;
 
  if (netmode) return;
- memcpy(viewbuffer,screen,64000);
+ memcpy(viewbuffer,screen,SCREENBYTES);
  lump=CA_GetNamedNum("menuanim");
  for(i=0;i<8;i++)
   frames[i]=CA_CacheLump(lump+i);
@@ -1154,9 +1177,9 @@ void ShowMenu(int n)
  escheld=true;
  INT_TimerHook(MenuCommand);
 
- scr=(byte *)malloc(64000);
+ scr=(byte *)malloc(HUD_MAXWIDTH*HUD_MAXHEIGHT);
  if (scr==NULL) MS_Error("ShowMenu: Out of Memory!");
- memcpy(scr,screen,64000);
+ memcpy(scr,screen,SCREENBYTES);
  if (SC.animation) MenuAnimate();
  MouseShow();
  ShowMenuLevel(n);
@@ -1193,16 +1216,27 @@ void ShowMenu(int n)
    if (netmode) TimeUpdate();
    } while (!quitmenu && !quitgame);
  MouseHide();
- memcpy(screen,scr,64000);
+ memcpy(screen,scr,SCREENBYTES);
  free(scr);
  if (gameloaded)
   {
    if (SC.vrhelmet==0)
     {
-     while (currentViewSize<SC.screensize)
-      ChangeViewSize(true);
-     while (currentViewSize>SC.screensize)
-      ChangeViewSize(false);
+     /* SC.hdmode is the renderer about to be applied further down, not the one
+        running now.  Bring the size into range for it before walking there, or
+        switching ORIGINAL -> HD from a size above MAXHDVIEWSIZE leaves the view
+        shrunk at a size HD has no way to render.  Walking down is never refused,
+        so this still applies while hdmode is the old value. */
+     if (SC.hdmode && SC.screensize>MAXHDVIEWSIZE) SC.screensize=MAXHDVIEWSIZE;
+     /* ChangeViewSize can refuse a step -- past MAXHDVIEWSIZE in HD -- and
+        these loops test the size it declines to change, so they need to stop
+        on "no movement" rather than spin. */
+     while (currentViewSize!=SC.screensize)
+      {
+       int prev=currentViewSize;
+       ChangeViewSize(currentViewSize<SC.screensize);
+       if (currentViewSize==prev) break;
+       }
      }
    }
  /* Applied on the way out rather than live, the way the view size always has
@@ -1210,7 +1244,10 @@ void ShowMenu(int n)
     whenever HD is active, not only on a change, because the fullscreen row
     above may just have altered the window the HD resolution is derived from. */
  if (SC.hdmode!=hdmode || hdmode)
-  VI_ApplyRenderMode();
+  {
+   RF_SetArtMode(SC.hdmode);   /* before the mode applies; frees and re-caches */
+   VI_ApplyRenderMode();
+   }
  SaveSetup(&SC,"SETUP.CFG");
  turnrate=0;
  moverate=0;
@@ -1228,16 +1265,19 @@ void ShowHelp(void)
  FILE *f;
 #endif
 
- s=(byte *)malloc(64000);
+ s=(byte *)malloc(HUD_MAXWIDTH*HUD_MAXHEIGHT);
  if (s==NULL) MS_Error("Error Allocating in ShowHelp");
- memcpy(s,screen,64000);
+ memcpy(s,screen,SCREENBYTES);
  VI_FillPalette(0,0,0);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
 #ifdef ASSASSINATOR
  f=fopen("help.dat","rb");
  if (f==NULL)
   MS_Error("Error Loading Help.Dat file");
+ /* Dead branch -- ASSASSINATOR is never defined.  If it is ever revived, this
+    reads a raw 320x200 image and so needs VI_BlitLogical, not a flat read into
+    a buffer whose pitch is now hudscale*320. */
  fread(screen,64000,1,f);
  fread(colors,768,1,f);
  fclose(f);
@@ -1253,7 +1293,7 @@ void ShowHelp(void)
    if (newascii || quitgame) break;
    }
  VI_FillPalette(0,0,0);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
 #ifdef DEMO
  loadscreen("INFO2");
@@ -1266,7 +1306,7 @@ void ShowHelp(void)
    if (newascii || quitgame) break;
    }
  VI_FillPalette(0,0,0);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
  loadscreen("INFO3");
  VI_SetPalette(colors);
@@ -1277,12 +1317,12 @@ void ShowHelp(void)
    if (netmode) TimeUpdate();
    if (newascii || quitgame) break;
    }
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
  VI_FillPalette(0,0,0);
 #endif
 
  VI_SetPalette(CA_CacheLump(CA_GetNamedNum("palette")));
- memcpy(screen,s,64000);
+ memcpy(screen,s,SCREENBYTES);
  free(s);
  }
 
@@ -1308,7 +1348,7 @@ void ShowPause(void)
  pic_t   *pics[4];
 
  INT_TimerHook(NULL);
- memcpy(viewbuffer,screen,64000);
+ memcpy(viewbuffer,screen,SCREENBYTES);
  lump=CA_GetNamedNum("pause");
  for(i=0;i<4;i++) pics[i]=CA_CacheLump(lump+i);
  timedelay=timecount+KBDELAY2;
@@ -1324,7 +1364,7 @@ void ShowPause(void)
    Sys_PumpFrame();     /* CheckPause reads keyboard[]; timecount ticks here */
    if (timecount>=droptime && y<72)
     {
-     if (y>=0) memcpy(ylookup[y],viewbuffer+320*y,640);
+     if (y>=0) RestoreChromeRows(y,2);
      y+=2;
      droptime=timecount+1;
      }
@@ -1345,7 +1385,7 @@ void ShowPause(void)
    if (quitgame) break;
    if (timecount>=droptime)
     {
-     if (y>=0) memcpy(ylookup[y],viewbuffer+320*y,640);
+     if (y>=0) RestoreChromeRows(y,2);
      y+=2;
      droptime=timecount+1;
      }
@@ -1357,7 +1397,7 @@ void ShowPause(void)
      }
    VI_DrawMaskedPic2(106,y,pics[anim]);
    }
- memcpy(screen,viewbuffer,64000);
+ memcpy(screen,viewbuffer,SCREENBYTES);
  for (i=0;i<4;i++)
   CA_FreeLump(lump+i);
  }
@@ -1368,7 +1408,7 @@ void StartWait(void)
 {
  int i, lump;
 
- memcpy(viewbuffer,screen,64000);
+ memcpy(viewbuffer,screen,SCREENBYTES);
  lump=CA_GetNamedNum("wait");
  for(i=0;i<4;i++) waitpics[i]=CA_CacheLump(lump+i);
  waitanim=0;
@@ -1380,7 +1420,11 @@ void StartWait(void)
 
 void UpdateWait(void)
 {
- if (timecount>timedelay)
+ /* Only while a wait is actually running.  waitpics[] is a zero-initialised
+    static that StartWait fills, so any caller outside a StartWait/EndWait pair
+    dereferences NULL -- which is what happened the moment LoadTextures was
+    called from RF_SetArtMode to swap the art set mid-game. */
+ if (waiting && timecount>timedelay)
   {
    ++waitanim;
    waitanim&=3;
@@ -1396,6 +1440,6 @@ void EndWait(void)
 
  lump=CA_GetNamedNum("wait");
  for(i=0;i<4;i++) CA_FreeLump(lump+i);
- memcpy(screen,viewbuffer,64000);
+ memcpy(screen,viewbuffer,SCREENBYTES);
  waiting=false;
  }

@@ -101,9 +101,32 @@ static void rebuild_lut(void)
 }
 
 
+void VI_SetHudScale(int scale)
+/* Re-lay the chrome buffer for a new hudscale.
+
+   `screen` is allocated once at the maximum size, so this only re-points
+   ylookup and updates the pitch.  Called from VI_Init and again whenever the
+   art set changes, before anything draws. */
+{
+    int y;
+
+    if (scale < 1) scale = 1;
+    if (scale > MAX_HUDSCALE) scale = MAX_HUDSCALE;
+    hudscale = scale;
+    screenpitch = SCREENWIDTH * scale;
+
+    for (y = 0; y < SCREENHEIGHT * scale; y++)
+        ylookup[y] = screen + y * screenpitch;
+    /* Rows past the current height would otherwise keep pointing into the
+       middle of the buffer at the old pitch. */
+    for (; y < HUD_MAXHEIGHT; y++)
+        ylookup[y] = screen;
+}
+
+
 void VI_Init(int specialbuffer)
 {
-    int            y;
+    int             y;
     SDL_WindowFlags flags;
 
     (void)specialbuffer;
@@ -134,13 +157,15 @@ void VI_Init(int specialbuffer)
 
     SDL_SetRenderVSync(renderer, 1);
 
-    screen  = (byte *)malloc(VGA_W * VGA_H);
+    /* Sized for the largest chrome scale up front rather than reallocated on a
+       mode change: 1 MB, and it removes any chance of a stale ylookup row
+       surviving a switch. */
+    screen  = (byte *)malloc(HUD_MAXWIDTH * HUD_MAXHEIGHT);
     if (!screen)
         MS_Error("VI_Init: Out of memory for screen");
-    memset(screen, 0, VGA_W * VGA_H);
+    memset(screen, 0, HUD_MAXWIDTH * HUD_MAXHEIGHT);
 
-    for (y = 0; y < SCREENHEIGHT; y++)
-        ylookup[y] = screen + y * SCREENWIDTH;
+    VI_SetHudScale(hudscale);
 
     transparency = CA_CacheLump(CA_GetNamedNum("TRANSPARENCY"));
 
@@ -244,7 +269,8 @@ void VI_ApplyRenderMode(void)
         overlay = SDL_CreateTexture(renderer,
                                     SDL_PIXELFORMAT_ARGB8888,
                                     SDL_TEXTUREACCESS_STREAMING,
-                                    VGA_W, VGA_H);
+                                    SCREENWIDTH * hudscale,
+                                    SCREENHEIGHT * hudscale);
         if (!overlay)
             MS_Error("VI_ApplyRenderMode: overlay texture failed: %s", SDL_GetError());
         SDL_SetTextureScaleMode(overlay, SDL_SCALEMODE_PIXELART);
@@ -253,6 +279,10 @@ void VI_ApplyRenderMode(void)
 
     px = hdw * hdh;
     if (px < VGA_W * VGA_H) px = VGA_W * VGA_H;
+    /* The chrome is expanded through convbuf too, and at hudscale 4 it is
+       1280x800 -- bigger than the view on a small display. */
+    if (px < SCREENWIDTH * hudscale * SCREENHEIGHT * hudscale)
+        px = SCREENWIDTH * hudscale * SCREENHEIGHT * hudscale;
     if (px > convbuf_px) {
         free(convbuf);
         convbuf = (Uint32 *)malloc((size_t)px * sizeof(Uint32));
@@ -365,10 +395,11 @@ void VI_BlitView(void)
         expand(viewbuffer, hdw, hdh);
         SDL_UpdateTexture(texture, NULL, convbuf, hdw * (int)sizeof(Uint32));
 
-        n = VGA_W * VGA_H;
+        n = screenpitch * SCREENHEIGHT * hudscale;
         for (i = 0; i < n; i++)
             convbuf[i] = screen[i] ? lut[screen[i]] : 0;
-        SDL_UpdateTexture(overlay, NULL, convbuf, VGA_W * (int)sizeof(Uint32));
+        SDL_UpdateTexture(overlay, NULL, convbuf,
+                          screenpitch * (int)sizeof(Uint32));
 
         dst.x = 0.0f;
         dst.y = 0.0f;
@@ -386,23 +417,28 @@ void VI_BlitView(void)
            nearest-downscaled in wherever the chrome left a hole.  Menus, fades,
            the pause box and the quit box all snapshot `screen` and draw over
            it, and are entitled to find the last visible frame there. */
-        for (y = 0; y < VGA_H; y++) {
-            byte *dest = screen + y * VGA_W;
-            byte *src  = viewbuffer + ((y * hdh) / VGA_H) * hdw;
+        {
+            int cw = SCREENWIDTH * hudscale, ch = SCREENHEIGHT * hudscale;
 
-            for (x = 0; x < VGA_W; x++)
-                if (!dest[x])
-                    dest[x] = src[(x * hdw) / VGA_W];
+            for (y = 0; y < ch; y++) {
+                byte *dest = screen + y * screenpitch;
+                byte *src  = viewbuffer + ((y * hdh) / ch) * hdw;
+
+                for (x = 0; x < cw; x++)
+                    if (!dest[x])
+                        dest[x] = src[(x * hdw) / cw];
+            }
         }
         return;
     }
 
-    expand(screen, VGA_W, VGA_H);
+    expand(screen, screenpitch, SCREENHEIGHT * hudscale);
 
     /* The 320x200 texture only exists at that size in original mode; in HD the
        main texture is the view buffer's size, so borrow the overlay. */
     if (hdmode) {
-        SDL_UpdateTexture(overlay, NULL, convbuf, VGA_W * (int)sizeof(Uint32));
+        SDL_UpdateTexture(overlay, NULL, convbuf,
+                          screenpitch * (int)sizeof(Uint32));
         Sys_GetPresentRect((float)winw, (float)winh, &dst);
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
@@ -413,7 +449,8 @@ void VI_BlitView(void)
         return;
     }
 
-    SDL_UpdateTexture(texture, NULL, convbuf, VGA_W * (int)sizeof(Uint32));
+    SDL_UpdateTexture(texture, NULL, convbuf,
+                      screenpitch * (int)sizeof(Uint32));
     Sys_GetPresentRect((float)winw, (float)winh, &dst);
 
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);

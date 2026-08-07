@@ -48,16 +48,30 @@ void FN_RawPrint4(char *str)
 {
  byte b;
  byte *dest, *source;
- int  width, height, y, oldpx, yh;
+ int  width, width0, height, y, oldpx, yh;
  char ch;
 
  oldpx=printx;
- dest=hudylookup[printy]+printx;
+ /* printy is logical and indexes a scaled row table; clip rather than fault if
+    a caller's hand-placed coordinate lands off the bottom.  VI_DrawMaskedPic
+    has always done the same. */
+ /* printx/printy are 320x200 logical, as every caller passes them, while the
+    glyphs and the buffer are hudscale times larger.  dest therefore steps in
+    chrome pixels while printx advances in logical units -- glyph widths are
+    hudscale times bigger, so dividing recovers the original advance and every
+    caller's hand-placed coordinate still lands where it did. */
+ /* Guard the row *table*, not the logical screen height.  ylookup/hudylookup
+    have HUD_MAXHEIGHT entries; running past that is the access violation.
+    Writing a few rows below 200 is not -- the buffer is HUD_MAXHEIGHT rows
+    whatever the mode, and the original engine did exactly that for text at the
+    bottom edge, so bounding by SCREENHEIGHT here changed what it drew. */
+ if (printy<0 || (printy*hudscale)+font->height>HUD_MAXHEIGHT) return;
+ dest=hudylookup[printy*hudscale]+printx*hudscale;
  height=font->height;
  while ((ch=*str++)!=0)
   {
-   width=font->width[ch];
-   source=((byte*)font) + font->charofs[ch];
+   width0=width=font->width[ch];
+   source=((byte*)font) + FN_CHAROFS(font,ch);
    while (width--)
     {
      for (y=0,yh=0;y<height;y++,yh+=hudWidth)
@@ -67,9 +81,9 @@ void FN_RawPrint4(char *str)
 	else dest[yh]=0;
        }
      dest++;
-     printx++;
      }
-   dest+=fontspacing;
+   printx+=width0/hudscale;
+   dest+=fontspacing*hudscale;
    printx+=fontspacing;
    }
  }
@@ -80,16 +94,30 @@ void FN_RawPrint2(char *str)
 {
  byte b;
  byte *dest, *source;
- int  width, height, y, oldpx, yh;
+ int  width, width0, height, y, oldpx, yh;
  char ch;
 
  oldpx=printx;
- dest=hudylookup[printy]+printx;
+ /* printy is logical and indexes a scaled row table; clip rather than fault if
+    a caller's hand-placed coordinate lands off the bottom.  VI_DrawMaskedPic
+    has always done the same. */
+ /* printx/printy are 320x200 logical, as every caller passes them, while the
+    glyphs and the buffer are hudscale times larger.  dest therefore steps in
+    chrome pixels while printx advances in logical units -- glyph widths are
+    hudscale times bigger, so dividing recovers the original advance and every
+    caller's hand-placed coordinate still lands where it did. */
+ /* Guard the row *table*, not the logical screen height.  ylookup/hudylookup
+    have HUD_MAXHEIGHT entries; running past that is the access violation.
+    Writing a few rows below 200 is not -- the buffer is HUD_MAXHEIGHT rows
+    whatever the mode, and the original engine did exactly that for text at the
+    bottom edge, so bounding by SCREENHEIGHT here changed what it drew. */
+ if (printy<0 || (printy*hudscale)+font->height>HUD_MAXHEIGHT) return;
+ dest=hudylookup[printy*hudscale]+printx*hudscale;
  height=font->height;
  while ((ch=*str++)!=0)
   {
-   width=font->width[ch];
-   source=((byte*)font) + font->charofs[ch];
+   width0=width=font->width[ch];
+   source=((byte*)font) + FN_CHAROFS(font,ch);
    while (width--)
     {
      for (y=0,yh=0;y<height;y++,yh+=hudWidth)
@@ -98,9 +126,9 @@ void FN_RawPrint2(char *str)
        if (b) dest[yh]=fontbasecolor+b;
        }
      dest++;
-     printx++;
      }
-   dest+=fontspacing;
+   printx+=width0/hudscale;
+   dest+=fontspacing*hudscale;
    printx+=fontspacing;
    }
  }
@@ -111,28 +139,31 @@ void FN_RawPrint(char *str)
 {
  byte b;
  byte *dest, *source;
- int  width, height, y, oldpx, yh;
+ int  width, width0, height, y, oldpx, yh;
  char ch;
 
  oldpx=printx;
- dest=ylookup[printy]+printx;
+ /* see the note in FN_RawPrint4 */
+ /* see the note in FN_RawPrint4 */
+ if (printy<0 || (printy*hudscale)+font->height>HUD_MAXHEIGHT) return;
+ dest=ylookup[printy*hudscale]+printx*hudscale;
  height=font->height;
  while ((ch=*str++) != 0)
   {
-   width=font->width[ch];
-   source=((byte *)font) + font->charofs[ch];
+   width0=width=font->width[ch];
+   source=((byte *)font) + FN_CHAROFS(font,ch);
    while (width--)
     {
-     for (y=0,yh=0;y<height;y++,yh+=320)
+     for (y=0,yh=0;y<height;y++,yh+=screenpitch)
       {
        b=*source++;
        if (b) dest[yh]=fontbasecolor+b;
 	else dest[yh]=0;
        }
      dest++;
-     printx++;
      }
-   dest+=fontspacing;
+   printx+=width0/hudscale;
+   dest+=fontspacing*hudscale;
    printx+=fontspacing;
    }
  }
@@ -143,27 +174,30 @@ void FN_RawPrint3(char *str)
 {
  byte b;
  byte *dest, *source;
- int  width, height, y, oldpx, yh;
+ int  width, width0, height, y, oldpx, yh;
  char ch;
 
  oldpx=printx;
- dest=ylookup[printy]+printx;
+ /* see the note in FN_RawPrint4 */
+ /* see the note in FN_RawPrint4 */
+ if (printy<0 || (printy*hudscale)+font->height>HUD_MAXHEIGHT) return;
+ dest=ylookup[printy*hudscale]+printx*hudscale;
  height=font->height;
  while ((ch=*str++) != 0)
   {
-   width=font->width[ch];
-   source=((byte *)font) + font->charofs[ch];
+   width0=width=font->width[ch];
+   source=((byte *)font) + FN_CHAROFS(font,ch);
    while (width--)
     {
-     for (y=0,yh=0;y<height;y++,yh+=320)
+     for (y=0,yh=0;y<height;y++,yh+=screenpitch)
       {
        b=*source++;
        if (b) dest[yh]=fontbasecolor+b;
        }
      dest++;
-     printx++;
      }
-   dest+=fontspacing;
+   printx+=width0/hudscale;
+   dest+=fontspacing*hudscale;
    printx+=fontspacing;
    }
  }
@@ -178,7 +212,7 @@ int FN_RawWidth(char *str)
  width=0;
  while (*str)
   {
-   width+=font->width[*str++];
+   width+=font->width[*str++]/hudscale;
    width+=fontspacing;
    }
  return width;
@@ -214,7 +248,7 @@ void FN_Print(char  *s)
  char     line[MAXPRINTF], *se;
  unsigned h;
 
- h=font->height;
+ h=FN_LINEHEIGHT;
  while (*s)
   {
    se=fn_copyline(s,line);
@@ -236,7 +270,7 @@ void FN_PrintCentered(char  *s)
  char     line[MAXPRINTF], *se;
  unsigned w, h;
 
- h=font->height;
+ h=FN_LINEHEIGHT;
  while (*s)
   {
    se=fn_copyline(s,line);   /* not in place -- see fn_copyline */
@@ -305,8 +339,8 @@ void FN_BlockCenterPrintf(char *fmt, ...)
  height=1;
  s=str;
  while (*s) if (*s++=='\n') height++;
- height*=font->height;
- printy=0+(200-height)/2;
+ height*=FN_LINEHEIGHT;
+ printy=0+(SCREENHEIGHT-height)/2;
  FN_PrintCentered(str);
  }
 

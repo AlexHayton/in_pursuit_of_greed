@@ -47,7 +47,7 @@ longint  keyboardDelay, frames, weapdelay, spritemovetime, secretdelay,
 font_t   *font1, *font2, *font3;
 pic_t    *weaponpic[7], *statusbar[4];
 byte     *backdrop;
-byte     *backdroplookup[256];
+byte     *backdroplookup[256<<2];   /* sized for the largest skyshift */
 bool  changingweapons, weaponlowering, quitgame, togglemapmode,
 	 toggleheatmode, heatmode, godmode, togglemotionmode, motionmode,
 	 hurtborder, recording, playback, activatemenu, specialcode,
@@ -1000,7 +1000,7 @@ void CheckItems(int centerx,int centery,bool useit,int chartype)
 	weaponlowering=false;
 	newweapon=index;
 	loadweapon(value2);
-	weaponychange=weaponpic[0]->height-20;
+	weaponychange=weaponpic[0]->height/hudscale-20;
 	changingweapons=true;
 	}
       else
@@ -1646,7 +1646,11 @@ void ControlMovement (void)
    resizeScreen=1;
    biggerScreen=1;
    keyboardDelay=timecount+KBDELAY;
-   if (SC.screensize<9) SC.screensize++;
+   /* Was a bare <9.  ChangeViewSize can refuse the step -- in HD everything
+      past MAXHDVIEWSIZE shrinks the view and cannot be applied -- and the
+      setting must not drift past what is actually on screen, because SaveSetup
+      persists it and newplayer restores the view from it. */
+   if (SC.screensize<MAXUSERVIEWSIZE) SC.screensize++;
    return;
    }
  if (keyboard[SC_F10] && !resizeScreen && timecount>keyboardDelay)
@@ -2918,7 +2922,7 @@ void startover(int restartvalue)
 void EndLevel(void)
 {
  VI_FadeOut(0,256,0,0,0,64);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
  VI_SetPalette(CA_CacheLump(CA_GetNamedNum("palette")));
  ++player.map;
  startover(1);
@@ -2961,19 +2965,24 @@ void DrawHolo(void)
  scalepic_t *spic;
 
  spic=lumpmain[player.holopic]; // draw the pic for it
- x=5;
- for (i=0;i<spic->width;i++,x++)
-  if (spic->collumnofs[i])
-   {
-    collumn=(byte *)spic+spic->collumnofs[i];
-    top=*(collumn+1);
-    bottom=*(collumn);
-    count=bottom-top+1;
-    collumn+=2;
-    y=hudHeight-top-count-5;
-    for (j=0;j<count;j++,collumn++,y++)
-     if (y>=0 && *collumn) *(hudylookup[y]+x)=*collumn;
-    }
+ x=5*hudscale;
+ for (i=0;i<SP_HUDLEN(SP_WIDTH(spic));i++,x++)
+  {
+   int src=SP_HUDSRC(i);
+   if (!SP_COLOFS(spic,src))
+    continue;
+   collumn=(byte *)spic+SP_COLOFS(spic,src);
+   top=SP_BOTTOM(collumn);
+   bottom=SP_TOP(collumn);
+   count=SP_HUDLEN(bottom-top+1);
+   collumn+=SP_COLHDR;
+   y=hudHeight-SP_HUDLEN(top)-count-5*hudscale;
+   for (j=0;j<count;j++,y++)
+    {
+     byte v=collumn[SP_HUDSRC(j)];
+     if (y>=0 && v) VI_HudPut(hudylookup,x,y,v);
+     }
+   }
  }
 
 
@@ -3055,10 +3064,13 @@ void PrepareNexus(void)
 
 void RunBrief(void)
 {
- memcpy(viewbuffer,screen,64000);
+ /* SCREENBYTES, not 64000: the chrome is hudscale*320 x hudscale*200, so a
+    fixed 64000 saved and restored only the top 50 rows of an HD screen and
+    left the briefing's art everywhere below them. */
+ memcpy(viewbuffer,screen,SCREENBYTES);
  MissionBriefing(player.map);
  INT_TimerHook(PlayerCommand);
- memcpy(screen,viewbuffer,64000);
+ memcpy(screen,viewbuffer,SCREENBYTES);
  activatebrief=false;
  }
 
@@ -3134,8 +3146,41 @@ void UpdateView(fixed_t px,fixed_t py,fixed_t pz,int angle,int update)
  if (hdresizepending)
   {
    hdresizepending=0;
+   RF_SetArtMode(SC.hdmode);
    VI_ApplyRenderMode();
    }
+
+ /* TEMPORARY -- test hook, like GREED_SHOT and GREED_MODE.  GREED_FLIP=<ticks>
+    flips the renderer mode at each listed tick, which is the only way to
+    exercise the live art swap without driving the options menu by hand.  That
+    swap is the risky path: it frees every overridable lump while weaponpic[],
+    statusbar[], heart[] and the fonts still point into them. */
+ {
+  const char *flip=getenv("GREED_FLIP");
+  if (flip)
+   {
+    static longint lastflip;
+    longint now=timecount/2;
+    char list[128], *tok;
+    if (now!=lastflip)
+     {
+      strncpy(list,flip,sizeof(list)-1);
+      list[sizeof(list)-1]=0;
+      for (tok=strtok(list,","); tok; tok=strtok(NULL,","))
+       {
+	longint want=(longint)atoi(tok);
+	if (lastflip<want && now>=want)
+	 {
+	  SC.hdmode=!SC.hdmode;
+	  printf("FLIP to %s at tick %ld\n",SC.hdmode?"hd":"original",(long)now);
+	  RF_SetArtMode(SC.hdmode);
+	  VI_ApplyRenderMode();
+	  }
+       }
+      lastflip=now;
+      }
+    }
+  }
 
  if (hdmode)
   memset(viewbuffer,0,(size_t)windowWidth*windowHeight);
@@ -3145,7 +3190,7 @@ void UpdateView(fixed_t px,fixed_t py,fixed_t pz,int angle,int update)
  /* In HD the 2D chrome is a separate 320x200 layer composited over the view,
     so it starts each frame empty.  Index 0 is the engine's existing "nothing
     drawn" value -- every VI_DrawMaskedPic* already skips it. */
- if (hdmode) memset(screen,0,SCREENWIDTH*SCREENHEIGHT);
+ if (hdmode) memset(screen,0,SCREENBYTES);
 
  if (update==1) TimeUpdate();
 
@@ -3155,6 +3200,10 @@ void UpdateView(fixed_t px,fixed_t py,fixed_t pz,int angle,int update)
 
  if (timecount<RearViewTime)
   {
+   /* rearbuf is a raw 64x64 camera render, so this whole inset is in CHROME
+      PIXELS -- x comes straight off hudWidth -- and must not go through the
+      logical helpers, which would scale it by hudscale a second time and write
+      thousands of pixels past the end of the row. */
    x=hudWidth-66;
    for(i=1;i<64;i++)
     {
@@ -3176,8 +3225,13 @@ void UpdateView(fixed_t px,fixed_t py,fixed_t pz,int angle,int update)
    if (update)
     wpic=weaponpic[weapmode];
 
-   weaponx=((hudWidth-wpic->width)>>1) + (weapmove[weapbob1]>>1);
-   weapony=hudHeight - wpic->height + (weapmove[weapbob1/2]>>3);
+   /* All of this is in 320x200 logical units, because that is what
+      VI_DrawMaskedPicToBuffer* expect -- they scale by hudscale on the way in.
+      hudWidth/hudHeight and the pic's own dimensions are in chrome pixels, so
+      both have to come back down first; without that the weapon is positioned
+      hudscale times too far right and low, i.e. off the screen entirely. */
+   weaponx=(((hudWidth-wpic->width)/hudscale)>>1) + (weapmove[weapbob1]>>1);
+   weapony=(hudHeight-wpic->height)/hudscale + (weapmove[weapbob1/2]>>3);
 
      if (currentViewSize>=6) weapony+=25;
       else if (currentViewSize==5) weapony+=15;
@@ -3185,16 +3239,16 @@ void UpdateView(fixed_t px,fixed_t py,fixed_t pz,int angle,int update)
       {
        weaponychange+=15;
        weapony+=weaponychange;
-       if (weapony>=hudHeight-20)
+       if (weapony>=hudHeight/hudscale-20)
 	{
 	 weaponlowering=false;
 	 player.currentweapon=newweapon;
 	 loadweapon(player.weapons[newweapon]);
 	 weapmode=0;
 	 wpic=weaponpic[weapmode];
-	 weaponychange=weaponpic[weapmode]->height-20;
-	 weapony=hudHeight-21;
-	 weaponx=((hudWidth-wpic->width)>>1) + (weapmove[weapbob1]>>1);
+	 weaponychange=weaponpic[weapmode]->height/hudscale-20;
+	 weapony=hudHeight/hudscale-21;
+	 weaponx=(((hudWidth-wpic->width)/hudscale)>>1) + (weapmove[weapbob1]>>1);
 	 }
        }
      else if (changingweapons)
@@ -3309,7 +3363,7 @@ void PlayLoop (void)
     {
      if (deadrestart)
       {
-		memset(screen,0,64000);
+		memset(screen,0,SCREENBYTES);
 
 		VI_SetPalette(CA_CacheLump(CA_GetNamedNum("palette")));
 
@@ -3650,16 +3704,29 @@ void InitData(void)
  probe.moveSpeed=MAXPROBE;
  probe.movesize=16<<FRACBITS; // half a tile
  probe.spawnid=playernum;
- ChangeViewSize(true);
- ChangeViewSize(true);
- ChangeViewSize(true);
- ChangeViewSize(true);
- ChangeViewSize(false);
- ChangeViewSize(false);
- ChangeViewSize(false);
- ChangeViewSize(false);
- for (i=0;i<currentViewSize;i++)
-  ChangeViewSize(true);
+ /* Walk the view size to both ends to force the projection tables to rebuild,
+    then put it back where the player had it.
+
+    The DOS original ends this with
+
+      for (i=0;i<currentViewSize;i++) ChangeViewSize(true);
+
+    which cannot restore anything: the bound is the counter's own target, so
+    every step raises it too and the loop climbs to the smallest view the engine
+    allows.  It was harmless only because SC.screensize was pinned to 0 and
+    currentViewSize was therefore always 0 here.  Now that the status bar is
+    reachable again this runs with a real value, so walk to a fixed target --
+    SC.screensize, which is also what makes a saved size take effect at level
+    start rather than only after a visit to the menu.  The step-check ends the
+    loop if ChangeViewSize refuses, which it does past MAXHDVIEWSIZE in HD. */
+ for (i=0;i<4;i++) ChangeViewSize(true);
+ for (i=0;i<4;i++) ChangeViewSize(false);
+ while (currentViewSize<SC.screensize)
+  {
+   int prev=currentViewSize;
+   ChangeViewSize(true);
+   if (currentViewSize==prev) break;
+   }
  resetdisplay();
  }
 

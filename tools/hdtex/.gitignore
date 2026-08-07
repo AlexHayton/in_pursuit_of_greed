@@ -1,0 +1,6 @@
+.venv/
+weights/
+work/
+bin/
+__pycache__/
+*.pyc

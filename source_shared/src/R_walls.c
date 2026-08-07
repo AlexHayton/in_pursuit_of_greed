@@ -92,7 +92,7 @@ void DrawWall(int x1,int x2)
 
  walltype=walltranslation[walltype];     // global animation
  wall=lumpmain[walllump+walltype];       // to get wall height
- postindex=wallposts+((walltype-1)<<6);  // 64 pointers to texture start
+ postindex=wallposts+((walltype-1)<<texshift);  // one pointer per texture column
  baseangle=viewfineangle;
  transparent=wallflags & F_TRANSPARENT;
  floor=floorheight[mapspot];
@@ -206,20 +206,33 @@ void DrawWall(int x1,int x2)
      }
 
    // calculate the texture post along the wall that was hit
-   texture=(textureadjust+FIXEDMUL(distance,tangents[angle]))>>FRACBITS;
+   /* The shift converts a world coordinate to a texel index.  It was >>FRACBITS
+      because one texel was one world unit; with a 4x pack there are four texels
+      per unit, so two fewer bits are dropped.  The sum overflows int32 for
+      angles near +-90 degrees, which is harmless only because the wrap moves
+      the result by a multiple of the texture width -- true for 2^18 and 256 as
+      it was for 2^16 and 64, but it would not survive a non-power-of-two size. */
+   texture=(textureadjust+FIXEDMUL(distance,tangents[angle]))>>(FRACBITS-texscaleshift);
 
-   if (rotateright) texture-=wallrotate;
-    else if (rotateleft) texture+=wallrotate;
+   /* wallrotate is an animation counter that cycles 0..63 (R_render.c), not a
+      texel count, so scale it here to keep the scroll at its original speed. */
+   if (rotateright) texture-=wallrotate<<texscaleshift;
+    else if (rotateleft) texture+=wallrotate<<texscaleshift;
     else if (x==x1 && x!=0) texture=0; // fix the incorrect looping problem
-   texture&=63;
+   texture&=texmask;
 
    sp_source=postindex[texture];
    if (!transparent)
     wallz[x]=pointz;
 
    // calculate the size and scale of the post
-   sp_fracstep=TEXELSTEP(pointz);
-   scale=sp_fracstep;
+   /* `scale` is geometry -- world units per screen row -- and projects the
+      ceiling and floor below.  `sp_fracstep` is the texture step, in texels per
+      screen row.  These were the same number while one texel was one world
+      unit and the code used them interchangeably; with a 4x pack they differ,
+      so stepping the texture with `scale` stretches it 4x vertically. */
+   scale=TEXELSTEP(pointz);
+   sp_fracstep=scale<<texscaleshift;
    if (scale<viewminscale) continue;
    top=FIXEDDIV(ceiling,scale)+FRACUNIT;
    topy=CENTERY - (top>>FRACBITS);
@@ -227,13 +240,13 @@ void DrawWall(int x1,int x2)
    sp_frac=FIXEDMUL(fracadjust,sp_fracstep);
 
    if (rotatedown)
-    sp_frac+=FRACUNIT*(63-wallrotate);
+    sp_frac+=(FRACUNIT*(63-wallrotate))<<texscaleshift;
    else if (rotateup)
-    sp_frac+=FRACUNIT*wallrotate;
+    sp_frac+=(FRACUNIT*wallrotate)<<texscaleshift;
 
    if (topy<scrollmin)
     {
-     sp_frac+=(scrollmin-topy)*scale;
+     sp_frac+=(scrollmin-topy)*sp_fracstep;
      if (sp_loopvalue>0)
         while (sp_frac>=sp_loopvalue) sp_frac-=sp_loopvalue;
      topy=scrollmin;
@@ -349,7 +362,7 @@ void DrawSteps(int x1, int x2)
  floor1=-((floor1<<FRACBITS)-viewz);       // distance below vi
  walltype1=walltranslation[walltype1];     // global animation
  wall1=lumpmain[walllump+walltype1];       // to get wall height
- postindex1=wallposts+((walltype1-1)<<6);  // 64 pointers to texture start
+ postindex1=wallposts+((walltype1-1)<<texshift);  // one pointer per texture column
 
 ceilingstep:
 
@@ -391,7 +404,7 @@ ceilingstep:
  walltype2=ceilingdef[tm];
  walltype2=walltranslation[walltype2];     // global animation
  wall2=lumpmain[walllump+walltype2];       // to get wall height
- postindex2=wallposts+((walltype2-1)<<6);  // 64 pointers to texture start
+ postindex2=wallposts+((walltype2-1)<<texshift);  // one pointer per texture column
  rotateleft2=ceilingdefflags[tm] & F_LEFT;
  rotateright2=ceilingdefflags[tm] & F_RIGHT;
  rotateup2=ceilingdefflags[tm] & F_UP;
@@ -442,22 +455,23 @@ skipceilingcalc:
      sp_colormap=zcolormap[light];
      }
 
-   texture=(textureadjust+FIXEDMUL(distance,tangents[angle]))>>FRACBITS;
+   texture=(textureadjust+FIXEDMUL(distance,tangents[angle]))>>(FRACBITS-texscaleshift);
 
    scale=TEXELSTEP(pointz);
 
    if (scale<viewminscale) continue;
 
-   sp_fracstep=scale;
+   /* geometry step vs texture step; see the note in DrawWall */
+   sp_fracstep=scale<<texscaleshift;
 
   /*=======================================*/
    if (floor)
     {
      texture2=texture;
-     if (rotateright1) texture2-=wallrotate;
-      else if (rotateleft1) texture2+=wallrotate;
+     if (rotateright1) texture2-=wallrotate<<texscaleshift;
+      else if (rotateleft1) texture2+=wallrotate<<texscaleshift;
       else if (x==x1 && x!=0) texture2=0; // fix the incorrect looping problem
-     texture2&=63;
+     texture2&=texmask;
      sp_source=postindex1[texture2];
      top=FIXEDDIV(ceiling1,scale);
      topy=CENTERY - (top>>FRACBITS);
@@ -466,16 +480,16 @@ skipceilingcalc:
 
      if (topy<scrollmin)
       {
-       sp_frac+=(scrollmin-topy)*scale;
+       sp_frac+=(scrollmin-topy)*sp_fracstep;
        sp_loopvalue=(*wall1 * 4)<<FRACBITS;
        if (sp_loopvalue>0)
         while (sp_frac>=sp_loopvalue) sp_frac-=sp_loopvalue;
        topy=scrollmin;
        }
      if (rotatedown1)
-      sp_frac+=FRACUNIT*(63-wallrotate);
+      sp_frac+=(FRACUNIT*(63-wallrotate))<<texscaleshift;
      else if (rotateup1)
-      sp_frac+=FRACUNIT*wallrotate;
+      sp_frac+=(FRACUNIT*wallrotate)<<texscaleshift;
 
      bottom=FIXEDDIV(floor1,scale)+FRACUNIT;
      bottomy=bottom>=((CENTERY+scrollmin)<<FRACBITS) ?
@@ -508,10 +522,10 @@ contceiling:
    if (ceiling)
     {
      texture2=texture;
-     if (rotateright2) texture2-=wallrotate;
-      else if (rotateleft2) texture2+=wallrotate;
+     if (rotateright2) texture2-=wallrotate<<texscaleshift;
+      else if (rotateleft2) texture2+=wallrotate<<texscaleshift;
       else if (x==x1 && x!=0) texture2=0; // fix the incorrect looping problem
-     texture2&=63;
+     texture2&=texmask;
      sp_source=postindex2[texture2];
      top=FIXEDDIV(ceiling2,scale)+FRACUNIT;
      topy=CENTERY - (top>>FRACBITS);
@@ -520,16 +534,16 @@ contceiling:
 
      if (topy<scrollmin)
       {
-       sp_frac+=(scrollmin-topy)*scale;
+       sp_frac+=(scrollmin-topy)*sp_fracstep;
        sp_loopvalue=(*wall2 * 4)<<FRACBITS;
        if (sp_loopvalue>0)
         while (sp_frac>=sp_loopvalue) sp_frac-=sp_loopvalue;
        topy=scrollmin;
        }
      if (rotatedown2)
-      sp_frac+=FRACUNIT*(63-wallrotate);
+      sp_frac+=(FRACUNIT*(63-wallrotate))<<texscaleshift;
      else if (rotateup2)
-      sp_frac+=FRACUNIT*wallrotate;
+      sp_frac+=(FRACUNIT*wallrotate)<<texscaleshift;
 
      bottom=FIXEDDIV(floor2,scale)+FRACUNIT;
      bottomy=bottom>=((CENTERY+scrollmin)<<FRACBITS) ?

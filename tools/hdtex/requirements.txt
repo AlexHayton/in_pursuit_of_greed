@@ -1,0 +1,10 @@
+# torch is installed separately by setup.ps1 / setup.sh, because the wheel comes
+# from a platform-specific index (CUDA on Windows, plain PyPI for macOS/MPS).
+#
+# Deliberately absent: realesrgan and basicsr.  basicsr imports
+# torchvision.transforms.functional_tensor, removed in torchvision 0.17, and
+# neither package is maintained; neither installs on the Python 3.13 this repo
+# has.  rrdbnet.py vendors the ~120 lines of model definition instead.
+numpy>=1.26
+pillow>=10.0
+tqdm>=4.66

@@ -144,6 +144,55 @@ extern int fragcount[MAXPLAYERS];
 
 /**** FUNCTIONS ****/
 
+static void DrawSpriteToChromeAt(byte **lookup,int w,int h,int x,int by,void *pic)
+/* Blit a sprite lump into the 2D chrome with its left edge at x and its
+   baseline at by, both already in chrome pixels.
+
+   Seven places did this inline with identical code; they are folded here
+   because the sprite lump layout and the chrome resolution can now both differ
+   from what that code assumed, and seven copies of the conversion is seven
+   chances to get one wrong.
+
+   With hudscale 1 and spriteshift 0 the arithmetic reduces exactly to the
+   original: SP_HUDLEN and SP_HUDSRC are the identity, so this is the same loop.
+
+   The clip against w/h is new.  The original relied on the icon fitting the box
+   the caller memsets, which stops being true the moment either scale changes. */
+{
+ byte *collumn;
+ int  i, j, y, sw, top, bottom, count;
+
+ sw=SP_HUDLEN(SP_WIDTH(pic));
+ for (i=0;i<sw;i++,x++)
+  {
+   int src=SP_HUDSRC(i);
+   if (!SP_COLOFS(pic,src) || x<0 || x>=w)
+    continue;
+   collumn=(byte *)pic+SP_COLOFS(pic,src);
+   top=SP_BOTTOM(collumn);
+   bottom=SP_TOP(collumn);
+   count=SP_HUDLEN(bottom-top+1);
+   collumn+=SP_COLHDR;
+   y=by-SP_HUDLEN(top)-count;
+   for (j=0;j<count;j++,y++)
+    {
+     byte v=collumn[SP_HUDSRC(j)];
+     if (v && y>=0 && y<h)
+      *(lookup[y]+x)=v;
+     }
+   }
+ }
+
+
+static void DrawSpriteToChrome(byte **lookup,int w,int h,int cx,int by,void *pic)
+/* The same, but centred on cx with its baseline at by, in 320x200 logical
+   coordinates -- which is what every caller has always passed. */
+{
+ DrawSpriteToChromeAt(lookup,w,h,
+		      cx*hudscale-(SP_HUDLEN(SP_WIDTH(pic))>>1),
+		      by*hudscale,pic);
+ }
+
 /*========================================================================*/
 
 void resetdisplay(void)
@@ -336,6 +385,15 @@ void useinventory(void)
 /*=======================================================================*/
 
 void displaystats1(int ofs)
+/* The shield and health meters.  The status bar art paints marker index 254
+   across each meter region and this rewrites those pixels with a gradient.
+
+   The writes go through VI_HudPut, which takes 320x200 logical coordinates, but
+   the matching reads were left as raw `*(hudylookup[i]+j)` -- chrome pixels.
+   At hudscale 4 that reads (j,i) of a 1280x800 buffer, which is up in the 3D
+   view, never 254, so no meter ever filled.  VI_HUDPEEK is the read that pairs
+   with VI_HudPut; it samples the top-left of the logical cell, which is exact
+   because the art pipeline replicates marker indices 4x4 as indices. */
 {
  int  d, i, j, c;
  char str1[20];
@@ -345,25 +403,25 @@ void displaystats1(int ofs)
   {
    c=(d*(i-(152+ofs)))/8 + 140;
    for(j=272;j<=300;j++)
-    if (*(hudylookup[i]+j)==254) *(hudylookup[i]+j)=c;
+    if (VI_HUDPEEK(hudylookup,j,i)==254) VI_HudPut(hudylookup,j,i,c);
    }
  for(i=193+ofs;i<=199+ofs;i++)
   {
    c=(d*((199+ofs)-i))/7 + 140;
    for(j=272;j<=300;j++)
-    if (*(hudylookup[i]+j)==254) *(hudylookup[i]+j)=c;
+    if (VI_HUDPEEK(hudylookup,j,i)==254) VI_HudPut(hudylookup,j,i,c);
    }
  for(j=307;j<=315;j++)
   {
    c=(d*(315-j))/9 + 140;
    for(i=165+ofs;i<=187+ofs;i++)
-    if (*(hudylookup[i]+j)==254) *(hudylookup[i]+j)=c;
+    if (VI_HUDPEEK(hudylookup,j,i)==254) VI_HudPut(hudylookup,j,i,c);
    }
  for(j=257;j<=265;j++)
   {
    c=(d*(j-257))/9 + 140;
    for(i=165+ofs;i<=187+ofs;i++)
-    if (*(hudylookup[i]+j)==254) *(hudylookup[i]+j)=c;
+    if (VI_HUDPEEK(hudylookup,j,i)==254) VI_HudPut(hudylookup,j,i,c);
    }
  d=(player.angst*10)/player.maxangst;
  if (d>=10) d=9;
@@ -379,7 +437,7 @@ void displaystats1(int ofs)
      if (c<120) c=113;
      }
    for(i=161+ofs;i<=185+ofs;i++)
-    if (*(hudylookup[i]+j)==254) *(hudylookup[i]+j)=c;
+    if (VI_HUDPEEK(hudylookup,j,i)==254) VI_HudPut(hudylookup,j,i,c);
    }
  font=font2;
  fontbasecolor=0;
@@ -402,7 +460,7 @@ void displaycompass1(int ofs)
  c=139;
  for(i=0;i<10;i++,c--)
   {
-   *(hudylookup[y]+x)=c;
+   VI_HudPut(hudylookup,x,y,c);
    x1+=costable[player.angle];
    y1-=FIXEDMUL(sintable[player.angle],54394);
    x=x1>>FRACBITS;
@@ -412,13 +470,21 @@ void displaycompass1(int ofs)
 
 
 void displaysettings1(int ofs)
+/* The three indicator lights along the bottom of the status bar.
+
+   The memsets were in chrome pixels against logical coordinates, so at
+   hudscale 4 all three landed on row 199 of a 1280x800 buffer -- off the bar
+   entirely, in the 3D view.
+
+   The "off" branch is gone rather than converted.  At these view sizes the
+   status bar lump is redrawn every frame (PlayLoop, just before updatedisplay),
+   so the unlit light is already what the art shows and erasing only overwrote
+   it.  In HD that erase was destructive: index 0 is the chrome layer's
+   transparent key, so it punched a hole through the bar to the view behind. */
 {
- if (heatmode) memset(hudylookup[199+ofs]+236,102,6);
-  else memset(hudylookup[199+ofs]+236,0,6);
- if (motionmode) memset(hudylookup[199+ofs]+246,156,6);
-  else memset(hudylookup[199+ofs]+246,0,6);
- if (mapmode) memset(hudylookup[199+ofs]+226,133,6);
-  else memset(hudylookup[199+ofs]+226,0,6);
+ if (heatmode)   VI_HudFill(hudylookup,236,199+ofs,6,1,102);
+ if (motionmode) VI_HudFill(hudylookup,246,199+ofs,6,1,156);
+ if (mapmode)    VI_HudFill(hudylookup,226,199+ofs,6,1,133);
  }
 
 
@@ -467,20 +533,7 @@ void displayinventory1(int ofs)
    sprintf(str1,"%2i",player.inventory[inventorycursor]);
    FN_RawPrint2(str1);
    pic=lumpmain[lump]; // draw the pic for it
-   x=128-(pic->width>>1);
-   for (i=0;i<pic->width;i++,x++)
-    if (pic->collumnofs[i])
-     {
-      collumn=(byte *)pic+pic->collumnofs[i];
-      top=*(collumn+1);
-      bottom=*(collumn);
-      count=bottom-top+1;
-      collumn+=2;
-      y=(188+ofs)-top-count;
-      for (j=0;j<count;j++,collumn++,y++)
-       if (*collumn)
-        *(hudylookup[y]+x)=*collumn;
-      }
+   DrawSpriteToChrome(hudylookup,hudWidth,hudHeight,128,(188+ofs),pic);
    }
  else
   {
@@ -529,20 +582,7 @@ void displaynetbonusitem1(int ofs)
    sprintf(str1,"%3i s ",time);
    name=BonusItem.name;
    pic=lumpmain[lump];
-   x=34-(pic->width>>1);
-   for (i=0;i<pic->width;i++,x++)
-    if (pic->collumnofs[i])
-     {
-      collumn=(byte *)pic+pic->collumnofs[i];
-      top=*(collumn+1);
-      bottom=*(collumn);
-      count=bottom-top+1;
-      collumn+=2;
-      y=(188+ofs)-top-count;
-       for (j=0;j<count;j++,collumn++,y++)
-	if (*collumn)
-	 *(hudylookup[y]+x)=*collumn;
-      }
+   DrawSpriteToChrome(hudylookup,hudWidth,hudHeight,34,(188+ofs),pic);
    }
  else
   {
@@ -551,10 +591,11 @@ void displaynetbonusitem1(int ofs)
    type="Player ";
    name=netnames[goalitem-1];
    sprintf(str1,"%-5i",fragcount[goalitem-1]);
-   b=&(p->data);
-   for (y=0;y<30;y++)
-    for (x=0;x<30;x++,b++)
-     *(hudylookup[y+158+ofs]+19+x)=*b;
+   /* was an open-coded 30x30 copy of the pic body in chrome pixels; the lump
+      is 120x120 with a 4x pack and the destination is logical.  Same change as
+      displaynetbonusitem2, which uses VI_DrawPic because at its view sizes the
+      chrome target is `screen`; here it is hudylookup. */
+   VI_DrawPicToBuffer(19,158+ofs,p);
    }
  printx=53;
  printy=172+ofs;
@@ -622,20 +663,7 @@ void displaybonusitem1(int ofs)
    }
 
  pic=lumpmain[lump];
- x=34-(pic->width>>1);
- for (i=0;i<pic->width;i++,x++)
-  if (pic->collumnofs[i])
-   {
-    collumn=(byte *)pic+pic->collumnofs[i];
-    top=*(collumn+1);
-    bottom=*(collumn);
-    count=bottom-top+1;
-    collumn+=2;
-    y=(188+ofs)-top-count;
-    for (j=0;j<count;j++,collumn++,y++)
-     if (*collumn)
-      *(hudylookup[y]+x)=*collumn;
-    }
+ DrawSpriteToChrome(hudylookup,hudWidth,hudHeight,34,(188+ofs),pic);
 
  printx=53;
  printy=162+ofs;
@@ -690,8 +718,8 @@ void displaystats2(void)
      c=(d*(i-(152)))/8 + 140;
      for(j=272;j<=300;j++)
       {
-       p=*(ylookup[i]+j);
-       if (p==254 || (p>=140 && p<=168)) *(ylookup[i]+j)=c;
+       p=VI_HUDPEEK(ylookup,j,i);
+       if (p==254 || (p>=140 && p<=168)) VI_HudPut(ylookup,j,i,c);
        }
      }
    for(i=193;i<=199;i++)
@@ -699,8 +727,8 @@ void displaystats2(void)
      c=(d*((199)-i))/7 + 140;
      for(j=272;j<=300;j++)
       {
-       p=*(ylookup[i]+j);
-       if (p==254 || (p>=140 && p<=168)) *(ylookup[i]+j)=c;
+       p=VI_HUDPEEK(ylookup,j,i);
+       if (p==254 || (p>=140 && p<=168)) VI_HudPut(ylookup,j,i,c);
        }
      }
    for(j=307;j<=315;j++)
@@ -708,8 +736,8 @@ void displaystats2(void)
      c=(d*(315-j))/9 + 140;
      for(i=165;i<=187;i++)
       {
-       p=*(ylookup[i]+j);
-       if (p==254 || (p>=140 && p<=168)) *(ylookup[i]+j)=c;
+       p=VI_HUDPEEK(ylookup,j,i);
+       if (p==254 || (p>=140 && p<=168)) VI_HudPut(ylookup,j,i,c);
        }
      }
    for(j=257;j<=265;j++)
@@ -717,8 +745,8 @@ void displaystats2(void)
      c=(d*(j-257))/9 + 140;
      for(i=165;i<=187;i++)
       {
-       p=*(ylookup[i]+j);
-       if (p==254 || (p>=140 && p<=168)) *(ylookup[i]+j)=c;
+       p=VI_HUDPEEK(ylookup,j,i);
+       if (p==254 || (p>=140 && p<=168)) VI_HudPut(ylookup,j,i,c);
        }
      }
    }
@@ -751,8 +779,8 @@ void displaystats2(void)
      }
    for(i=161;i<=185;i++)
     {
-     p=*(ylookup[i]+j);
-     if (p==254 || (p>=113 && p<=139)) *(ylookup[i]+j)=c;
+     p=VI_HUDPEEK(ylookup,j,i);
+     if (p==254 || (p>=113 && p<=139)) VI_HudPut(ylookup,j,i,c);
      }
    }
  }
@@ -772,7 +800,7 @@ void displaycompass2(void)
    y1=y<<FRACBITS;
    for(i=0;i<10;i++)
     {
-     *(ylookup[y]+x)=0;
+     VI_HudPut(ylookup,x,y,0);
      x1+=costable[oldangle];
      y1-=FIXEDMUL(sintable[oldangle],54394);
      x=x1>>FRACBITS;
@@ -787,7 +815,7 @@ void displaycompass2(void)
  c=139;
  for(i=0;i<10;i++,c--)
   {
-   *(ylookup[y]+x)=c;
+   VI_HudPut(ylookup,x,y,c);
    x1+=costable[oldangle];
    y1-=FIXEDMUL(sintable[oldangle],54394);
    x=x1>>FRACBITS;
@@ -798,12 +826,12 @@ void displaycompass2(void)
 
 void displaysettings2(void)
 {
- if (heatmode) memset(ylookup[199]+236,102,6);
-  else memset(ylookup[199]+236,0,6);
- if (motionmode) memset(ylookup[199]+246,156,6);
-  else memset(ylookup[199]+246,0,6);
- if (mapmode) memset(ylookup[199]+226,133,6);
-  else memset(ylookup[199]+226,0,6);
+ if (heatmode) VI_HudFill(ylookup,236,199,6,1,102);
+  else VI_HudFill(ylookup,236,199,6,1,0);
+ if (motionmode) VI_HudFill(ylookup,246,199,6,1,156);
+  else VI_HudFill(ylookup,246,199,6,1,0);
+ if (mapmode) VI_HudFill(ylookup,226,199,6,1,133);
+  else VI_HudFill(ylookup,226,199,6,1,0);
  }
 
 
@@ -841,7 +869,7 @@ void displayinventory2(void)
  if (inventorycursor!=oldinventory)
   {
    oldinventory=inventorycursor;
-   for (i=162;i<=184;i++) memset(ylookup[i]+113,0,30);
+   VI_HudFill(ylookup,113,162,30,23,0);
    if (inventorycursor!=-1)
     {
      lump=inventorylump + inventorycursor;
@@ -849,20 +877,7 @@ void displayinventory2(void)
      printy=163;
      FN_RawPrint(inventorynames[inventorycursor]);
      pic=lumpmain[lump]; // draw the pic for it
-     x=128-(pic->width>>1);
-     for (i=0;i<pic->width;i++,x++)
-      if (pic->collumnofs[i])
-       {
-	collumn=(byte *)pic+pic->collumnofs[i];
-	top=*(collumn+1);
-	bottom=*(collumn);
-	count=bottom-top+1;
-	collumn+=2;
-	y=188-top-count;
-	for (j=0;j<count;j++,collumn++,y++)
-	 if (*collumn)
-          *(ylookup[y]+x)=*collumn;
-	}
+     DrawSpriteToChrome(ylookup,SCREENWIDTH*hudscale,SCREENHEIGHT*hudscale,128,188,pic);
      font=font3;         // number of items
      printx=150;
      printy=172;
@@ -897,8 +912,7 @@ void displaynetbonusitem2(void)
  if (goalitem==-1)
   {
    if (BonusItem.score) togglegoalitem=true;
-   for(i=158;i<188;i++)
-    memset(ylookup[i]+19,0,30);
+   VI_HudFill(ylookup,19,158,30,30,0);
    font=font2;
    fontbasecolor=0;
    printx=53;
@@ -934,22 +948,8 @@ void displaynetbonusitem2(void)
    sprintf(str1,"%3i s",time);
    name=BonusItem.name;
    pic=lumpmain[lump];
-   x=34-(pic->width>>1);
-   for(i=158;i<188;i++)
-    memset(ylookup[i]+19,0,30);
-   for (i=0;i<pic->width;i++,x++)
-    if (pic->collumnofs[i])
-     {
-      collumn=(byte *)pic+pic->collumnofs[i];
-      top=*(collumn+1);
-      bottom=*(collumn);
-      count=bottom-top+1;
-      collumn+=2;
-      y=188-top-count;
-      for (j=0;j<count;j++,collumn++,y++)
-       if (*collumn)
-	*(ylookup[y]+x)=*collumn;
-      }
+   VI_HudFill(ylookup,19,158,30,30,0);
+   DrawSpriteToChrome(ylookup,SCREENWIDTH*hudscale,SCREENHEIGHT*hudscale,34,188,pic);
    }
  else
   {
@@ -959,20 +959,15 @@ void displaynetbonusitem2(void)
    name=netnames[goalitem-1];
    sprintf(str1,"%-5i",fragcount[goalitem-1]);
 
-   b=&(p->data);
-   for (y=0;y<30;y++)
-    for (x=0;x<30;x++,b++)
-     *(ylookup[y+158]+19+x)=*b;
+   /* was an open-coded 30x30 copy of the pic body; VI_DrawPic already knows
+      the pic's real size and scales for the chrome. */
+   VI_DrawPic(19,158,p);
    }
  oldgoalitem=goalitem;
- for(i=162;i<168;i++)
-  memset(ylookup[i]+53,0,23);
- for(i=172;i<178;i++)
-  memset(ylookup[i]+53,0,30);
- for(i=182;i<188;i++)
-  memset(ylookup[i]+53,0,39);
- for(i=192;i<198;i++)
-  memset(ylookup[i]+22,0,159);
+ VI_HudFill(ylookup,53,162,23,6,0);
+ VI_HudFill(ylookup,53,172,30,6,0);
+ VI_HudFill(ylookup,53,182,39,6,0);
+ VI_HudFill(ylookup,22,192,159,6,0);
  printx=53;
  printy=162;
  FN_RawPrint("     ");
@@ -1001,8 +996,7 @@ void displaybonusitem2(void)
  if (goalitem==-1)
   {
    if (BonusItem.score) togglegoalitem=true;
-   for(i=158;i<188;i++)
-    memset(ylookup[i]+19,0,30);
+   VI_HudFill(ylookup,19,158,30,30,0);
    font=font2;
    fontbasecolor=0;
    printx=53;
@@ -1068,32 +1062,14 @@ void displaybonusitem2(void)
 
  oldgoalitem=goalitem;
 
- for(i=158;i<188;i++)
-  memset(ylookup[i]+19,0,30);
+ VI_HudFill(ylookup,19,158,30,30,0);
  pic=lumpmain[lump];
- x=34-(pic->width>>1);
- for (i=0;i<pic->width;i++,x++)
-  if (pic->collumnofs[i])
-   {
-    collumn=(byte *)pic+pic->collumnofs[i];
-    top=*(collumn+1);
-    bottom=*(collumn);
-    count=bottom-top+1;
-    collumn+=2;
-    y=188-top-count;
-    for (j=0;j<count;j++,collumn++,y++)
-     if (*collumn)
-      *(ylookup[y]+x)=*collumn;
-    }
+ DrawSpriteToChrome(ylookup,SCREENWIDTH*hudscale,SCREENHEIGHT*hudscale,34,188,pic);
 
- for(i=162;i<168;i++)
-  memset(ylookup[i]+53,0,23);
- for(i=172;i<178;i++)
-  memset(ylookup[i]+53,0,30);
- for(i=182;i<188;i++)
-  memset(ylookup[i]+53,0,39);
- for(i=192;i<198;i++)
-  memset(ylookup[i]+22,0,159);
+ VI_HudFill(ylookup,53,162,23,6,0);
+ VI_HudFill(ylookup,53,172,30,6,0);
+ VI_HudFill(ylookup,53,182,39,6,0);
+ VI_HudFill(ylookup,22,192,159,6,0);
 
  printx=53;
  printy=162;
@@ -1180,12 +1156,12 @@ void displaybodycount2(void)
     {
      c=(j*26)/d1;
      for(i=2;i<=8;i++)
-      *(ylookup[i]+j+221)=c+140;
+      VI_HudPut(ylookup,j+221,i,c+140);
      }
    if (d<97)
     for(j=d;j<=97;j++)
      for(i=2;i<=8;i++)
-      *(ylookup[i]+j+221)=0;
+      VI_HudPut(ylookup,j+221,i,0);
    }
  }
 
@@ -1193,37 +1169,27 @@ void displaybodycount2(void)
 
 void displayinventoryitem(void)
 {
- int        lump, i, j, count, top, bottom, x, y;
+ int        lump, i, j, count, top, bottom, x, y, hw;
  char       str1[20];
  scalepic_t *pic;
  byte       *collumn;
 
  if (inventorycursor<0) return;
+ /* Right-aligned against the chrome.  hudWidth is in pixels while everything
+    that follows -- the helpers, the sprite blit, printx/printy -- is logical,
+    so bring it down once here rather than mixing the two. */
+ hw=hudWidth/hudscale;
+ VI_HudFill(hudylookup,hw-54,0,54,27,0);
  for(i=0;i<27;i++)
-  {
-   memset(hudylookup[i]+hudWidth-54,0,54);
-   *(hudylookup[i]+hudWidth-55)=30;
-   }
- memset(hudylookup[i]+hudWidth-55,30,55);
+  VI_HudPut(hudylookup,hw-55,i,30);
+ VI_HudFill(hudylookup,hw-55,27,55,1,30);
  lump=inventorylump + inventorycursor;
  pic=lumpmain[lump]; // draw the pic for it
- x=hudWidth-31;
- for (i=0;i<pic->width;i++,x++)
-  if (pic->collumnofs[i])
-   {
-    collumn=(byte *)pic+pic->collumnofs[i];
-    top=*(collumn+1);
-    bottom=*(collumn);
-    count=bottom-top+1;
-    collumn+=2;
-    y=28-top-count;
-    for (j=0;j<count;j++,collumn++,y++)
-     if (*collumn)
-      *(hudylookup[y]+x)=*collumn;
-    }
+ DrawSpriteToChromeAt(hudylookup,hudWidth,hudHeight,
+		      (hw-31)*hudscale,28*hudscale,pic);
  fontbasecolor=0;
  font=font3;         // number of items
- printx=hudWidth-53;
+ printx=hw-53;
  printy=6;
  sprintf(str1,"%2i",player.inventory[inventorycursor]);
  FN_RawPrint4(str1);
@@ -1277,45 +1243,65 @@ void updatedisplay(void)
 
 /*=====================================================================*/
 
+static void arrowput(int x,int y,int c)
+/* One pixel of the automap's player arrow, in CHROME PIXELS.
+
+   These went through VI_HudPut during the HD conversion, which takes 320x200
+   logical coordinates and multiplies by hudscale -- but the only caller is
+   displaymapmode, which passes hudWidth/2 and hudHeight/2.  Those are already
+   pixels, so at hudscale 4 the write landed at four times the centre of the
+   buffer: past the end of hudylookup[], which is a wild pointer, not a stray
+   pixel.  Toggling the automap segfaulted every time.
+
+   Pixels rather than logical is the right unit here because the map around the
+   arrow is drawn in pixels too -- displaymapmode steps four pixels per tile --
+   so a logical arrow would be twelve pixels across a four-pixel grid.  Bounds
+   checked the same way as the rest of that function. */
+{
+ if (x>=0 && x<hudWidth && y>=0 && y<hudHeight)
+  *(hudylookup[y]+x)=c;
+ }
+
+
 void displayarrow(int x,int y)
 {
  int angle;
 
- *(hudylookup[y]+x)=26;
+ arrowput(x,y,26);
  angle=(((player.angle+DEGREE45_2)&ANGLES)*8)/ANGLES;
  switch (angle)
   {
    case 0:
-    *(hudylookup[y]+x+1)=40;
-    *(hudylookup[y]+x-1)=20;
+    arrowput(x+1,y,40);
+    arrowput(x-1,y,20);
     break;
    case 1:
-    *(hudylookup[y-1]+x+1)=40;
-    *(hudylookup[y+1]+x-1)=20;
+    arrowput(x+1,y-1,40);
+    arrowput(x-1,y+1,20);
     break;
    case 2:
-    *(hudylookup[y-1]+x)=40;
-    *(hudylookup[y+1]+x)=20;
+    arrowput(x,y-1,40);
+    arrowput(x,y+1,20);
     break;
    case 3:
-    *(hudylookup[y-1]+x-1)=40;
-    *(hudylookup[y+1]+x+1)=20;
+    arrowput(x-1,y-1,40);
+    arrowput(x+1,y+1,20);
     break;
    case 4:
-    *(hudylookup[y]+x-1)=40;
-    *(hudylookup[y]+x+1)=20;
+    arrowput(x-1,y,40);
+    arrowput(x+1,y,20);
     break;
    case 5:
-    *(hudylookup[y+1]+x-1)=40;
-    *(hudylookup[y-1]+x+1)=20;
+    arrowput(x-1,y+1,40);
+    arrowput(x+1,y-1,20);
     break;
    case 6:
-    *(hudylookup[y+1]+x)=40;
-    *(hudylookup[y-1]+x)=20;
+    arrowput(x,y+1,40);
+    arrowput(x,y-1,20);
     break;
    case 7:
-    *(hudylookup[y+1]+x+1)=40;
-    *(hudylookup[y-1]+x-1)=20;
+    arrowput(x+1,y+1,40);
+    arrowput(x-1,y-1,20);
     break;
    }
  }
@@ -1613,6 +1599,13 @@ void displayswingmapmode(void)
 
 void displayheatmode(void)
 /* display overhead heat sensor */
+/* One cell per map tile, 64x64 of them inside a border at logical (2,20).
+
+   The border was converted to the logical helpers and the cells were not, so
+   at hudscale 4 the 66x66 border was drawn four times life size around a 64x64
+   patch of cells that stayed in the top-left corner of it.  The cells are what
+   the border is meant to frame, so they follow it: a cell is a logical pixel,
+   which keeps the sensor the same fraction of the screen it was at 320x200. */
 {
  int i, j, c;
 
@@ -1623,20 +1616,20 @@ void displayheatmode(void)
      c=-reallight[i*64+j]/48;
      if (c>15) c=15;
       else if (c<0) c=0;
-     *(hudylookup[i+21]+j+3)=88-c;
+     VI_HudPut(hudylookup,j+3,i+21,88-c);
      }
- memset(hudylookup[20]+2,73,66);
- memset(hudylookup[85]+2,73,66);
+ VI_HudFill(hudylookup,2,20,66,1,73);
+ VI_HudFill(hudylookup,2,85,66,1,73);
  for(i=21;i<85;i++)
   {
-   *(hudylookup[i]+2)=73;
-   *(hudylookup[i]+67)=73;
+   VI_HudPut(hudylookup,2,i,73);
+   VI_HudPut(hudylookup,67,i,73);
    }
- *(hudylookup[(player.y>>FRACTILESHIFT)+21]+(player.x>>FRACTILESHIFT)+3)=40;
+ VI_HudPut(hudylookup,(player.x>>FRACTILESHIFT)+3,(player.y>>FRACTILESHIFT)+21,40);
  if (BonusItem.score)
-  *(hudylookup[BonusItem.tiley + 21] + BonusItem.tilex + 3)=44;
+  VI_HudPut(hudylookup,BonusItem.tilex+3,BonusItem.tiley+21,44);
  if (exitexists)
-  *(hudylookup[exity + 21] + exitx + 3)=187;
+  VI_HudPut(hudylookup,exitx+3,exity+21,187);
  }
 
 
@@ -1691,20 +1684,22 @@ void displaymotionmode(void)
    {
     sx=sp->x>>FRACTILESHIFT;
     sy=sp->y>>FRACTILESHIFT;
-    *(hudylookup[sy+21]+sx+3)=152;
+    VI_HudPut(hudylookup,sx+3,sy+21,152);
     }
- memset(hudylookup[20]+2,73,66);
- memset(hudylookup[85]+2,73,66);
+ VI_HudFill(hudylookup,2,20,66,1,73);
+ VI_HudFill(hudylookup,2,85,66,1,73);
  for(i=21;i<85;i++)
   {
-   *(hudylookup[i]+2)=73;
-   *(hudylookup[i]+67)=73;
+   VI_HudPut(hudylookup,2,i,73);
+   VI_HudPut(hudylookup,67,i,73);
    }
- *(hudylookup[(player.y>>FRACTILESHIFT)+21]+(player.x>>FRACTILESHIFT)+3)=40;
+ /* logical, to match the border above and the sprite dots -- see
+    displayheatmode.  These three were the only pixel writes left here. */
+ VI_HudPut(hudylookup,(player.x>>FRACTILESHIFT)+3,(player.y>>FRACTILESHIFT)+21,40);
  if (BonusItem.score)
-  *(hudylookup[BonusItem.tiley + 21] + BonusItem.tilex + 3)=44;
+  VI_HudPut(hudylookup,BonusItem.tilex+3,BonusItem.tiley+21,44);
  if (exitexists)
-  *(hudylookup[exity + 21] + exitx + 3)=187;
+  VI_HudPut(hudylookup,exitx+3,exity+21,187);
  }
 
 

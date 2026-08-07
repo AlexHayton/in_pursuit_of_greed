@@ -62,6 +62,20 @@ int     viewclipy = 640;
    an HD scale than it does at 320x200.  Exactly 1000 when the projection is
    160. */
 int     viewminscale = 1000;
+/* Texture resolution; see the block comment in R_public.h.  Defaults describe
+   the original 64x64 art, so a build with no HD sidecar behaves exactly as it
+   did before -- every expression below that uses these reduces to the literal
+   it replaced.  CA_OverlayArt raises them when a 4x pack is present. */
+int     texshift       = TILESHIFT;          /* 6 */
+int     texscaleshift  = 0;                  /* texshift - TILESHIFT */
+int     texmask        = (1<<TILESHIFT)-1;   /* 63 */
+int     flatshift      = TILESHIFT;
+int     flatscaleshift = 0;
+int     flatmask       = (1<<TILESHIFT)-1;
+int     spriteshift    = 0;
+int     hudscale       = 1;
+int     skyshift       = 0;
+int     skymask        = 255;
 /* Where the 2D chrome -- status bar, weapon, HUD, map modes, messages -- is
    drawn.  In original mode that is the view buffer itself, because the engine
    composites everything into viewbuffer and RF_BlitView copies the lot to
@@ -219,7 +233,7 @@ void InitTables(void)
    }
  cosines=&sines[TANANGLES];
  for(i=0;i<TANANGLES*2;i++)
-  backtangents[i]=((windowWidth/2)*tangents[i])>>FRACBITS;
+  backtangents[i]=((windowWidth/2)*tangents[i])>>(FRACBITS-skyshift);
  }
 
 
@@ -621,15 +635,22 @@ void SetViewSize(int width, int height)
  for(i=-viewscroll;i<height+viewscroll;i++)
   yslope[i+viewscroll] = rint(-(float)(i-0.5-CENTERY)/proj*FRACUNIT);
  for(i=0;i<TANANGLES*2;i++)
-  backtangents[i]=(proj*tangents[i])>>FRACBITS;
- hfrac=FIXEDDIV(BACKDROPHEIGHT<<FRACBITS,(windowHeight/2)<<FRACBITS);
+  /* Shifted by skyshift less than the obvious >>FRACBITS: backtangents
+     indexes backdrop columns, and rounding to whole view pixels first would
+     make a 1024-wide sky sample only every fourth column -- the same 256
+     columns replicated, with no detail gained. */
+  backtangents[i]=(proj*tangents[i])>>(FRACBITS-skyshift);
+ hfrac=FIXEDDIV((BACKDROPHEIGHT<<skyshift)<<FRACBITS,(windowHeight/2)<<FRACBITS);
  afrac=FIXEDDIV(TANANGLES<<FRACBITS,(2*proj)<<FRACBITS);
 
  if (hdmode)
   {
    hudylookup=ylookup;
-   hudWidth=SCREENWIDTH;
-   hudHeight=SCREENHEIGHT;
+   /* The chrome is authored at 320x200 but the buffer behind it is hudscale
+      times larger on each axis with a 4x art pack; the blit primitives take
+      logical coordinates and scale on the way in. */
+   hudWidth=SCREENWIDTH*hudscale;
+   hudHeight=SCREENHEIGHT*hudscale;
    }
  else
   {

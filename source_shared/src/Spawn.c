@@ -38,6 +38,34 @@ extern int       bloodcount, metalcount;
 
 /**** FUNCTIONS ****/
 
+void PatchSpriteLump(void *lump)
+/* Rewrite index 255 to 0 in a sprite lump's pixel data.
+
+   DemandLoadMonster has always done this inline on load; it is factored out
+   because the art-set switch re-caches sprite lumps directly and has to apply
+   the same fixup, or every 255 in the art draws as an opaque colour instead of
+   being transparent. */
+{
+ scalepic_t *pic=(scalepic_t *)lump;
+ byte       *collumn;
+ int        i, j, count, top, bottom;
+
+ if (!pic) return;
+ for (i=0;i<SP_WIDTH(pic);i++)
+  if (SP_COLOFS(pic,i))
+   {
+    collumn=(byte *)pic+SP_COLOFS(pic,i);
+    top=SP_BOTTOM(collumn);
+    bottom=SP_TOP(collumn);
+    count=bottom-top+1;
+    collumn+=SP_COLHDR;
+    for (j=0;j<count;j++,collumn++)
+     if (*collumn==255)
+      *collumn=0;
+    }
+ }
+
+
 void DemandLoadMonster(int lump, int num)
 {
  int        i, j, l, count, top, bottom;
@@ -50,18 +78,7 @@ void DemandLoadMonster(int lump, int num)
   {
    CA_CacheLump(lump+l);
    pic=lumpmain[lump+l];
-   for (i=0;i<pic->width;i++)
-    if (pic->collumnofs[i])
-     {
-      collumn=(byte *)pic+pic->collumnofs[i];
-      top=*(collumn+1);
-      bottom=*(collumn);
-      count=bottom-top+1;
-      collumn+=2;
-      for (j=0;j<count;j++,collumn++)
-       if (*collumn==255)
-	*collumn=0;
-      }
+   PatchSpriteLump(pic);
    }
  }
 
