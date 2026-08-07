@@ -42,7 +42,10 @@
    time cancelled out for the 3D view while leaving everything else upside
    down. */
 byte *		screen;
-byte *		ylookup[SCREENHEIGHT];
+byte *		ylookup[HUD_MAXHEIGHT];
+/* SCREENWIDTH is the logical width; this is the actual row pitch of `screen`.
+   Set by VI_SetHudScale, 320 until an HD art pack raises hudscale. */
+int		screenpitch = SCREENWIDTH;
 byte *		transparency;
 byte *		translookup[255];
 
@@ -138,6 +141,66 @@ void VI_FadeIn(int start,int end,byte *palette,int steps)
  }
 
 
+/* Procedural chrome drawing in 320x200 logical coordinates.
+
+   The status bar, automap and HUD draw boxes and individual pixels with
+   hand-placed coordinates -- roughly fifty sites across Display.c and Menu.c.
+   Rather than scale every one of them by hand, they go through these, which
+   take logical coordinates and cover the whole hudscale x hudscale cell.
+
+   That is exactly right for the meter substitution in Display.c: the status
+   bar's marker indices are replicated 4x4 by the art pipeline precisely so a
+   logical cell is uniform, so peeking at its top-left corner reads the original
+   index and filling the cell preserves the block structure.  See
+   palette.SEMANTIC_INDICES in tools/hdtex.
+
+   At hudscale 1 each of these is the single memset or store it replaced. */
+
+void VI_HudFill(byte **lookup,int x,int y,int w,int h,int c)
+{
+ int row;
+
+ for (row=y*hudscale;row<(y+h)*hudscale;row++)
+  memset(lookup[row]+x*hudscale,c,(size_t)w*hudscale);
+ }
+
+
+void VI_HudPut(byte **lookup,int x,int y,int c)
+{
+ int row;
+
+ for (row=y*hudscale;row<(y+1)*hudscale;row++)
+  memset(lookup[row]+x*hudscale,c,(size_t)hudscale);
+ }
+
+
+void VI_BlitLogical(byte *src,int sw,int sh)
+/* Copy a packed sw x sh image into the chrome buffer, point-scaled to fill it.
+
+   For content whose size is fixed by its own format rather than by hudscale --
+   the FLI cutscenes.  Sampling runs both ways: the shipped 640x400 set is
+   doubled into HD chrome and reduced into original chrome, and the untouched
+   320x200 originals are stretched.  All of them fill the screen, and none
+   depends on the chrome happening to match. */
+{
+ int y, x, ch=SCREENHEIGHT*hudscale;
+
+ if (sw==screenpitch && sh==ch)
+  {
+   memcpy(screen,src,(size_t)sw*sh);
+   return;
+   }
+ for (y=0;y<ch;y++)
+  {
+   byte *d=screen+y*screenpitch;
+   byte *s=src+((y*sh)/ch)*sw;
+
+   for (x=0;x<screenpitch;x++)
+    d[x]=s[(x*sw)/screenpitch];
+   }
+ }
+
+
 void VI_DrawPic(int x,int y,pic_t * pic)
 {
 	byte *	dest;
@@ -145,16 +208,56 @@ void VI_DrawPic(int x,int y,pic_t * pic)
 	int		width;
 	int		height;
 
+	/* x and y arrive in 320x200 logical coordinates -- every caller in the
+	   engine still thinks in those -- while the artwork and the buffer are
+	   both hudscale times larger.  Scaling here is what lets a 4x HUD happen
+	   without touching a single call site.  hudscale is 1 without an HD art
+	   pack, so this is then the original expression. */
 	width = pic->width;
 	height = pic->height;
 	source = &pic->data;
-	dest = ylookup[y] + x;
+	dest = ylookup[y*hudscale] + x*hudscale;
 
 	while ( height-- )
 	{
 		memcpy(dest,source,width);
-		dest += SCREENWIDTH;
+		dest += screenpitch;
 		source += width;
+	}
+}
+
+
+void VI_DrawPicToBuffer(int x,int y,pic_t *pic)
+/* VI_DrawPic, but to the chrome target rather than to `screen`.
+
+   Needed because the two are not the same buffer outside HD: hudylookup is
+   viewylookup there, whose rows are windowWidth apart and not screenpitch, so
+   neither the destination nor the stride of VI_DrawPic applies.  Indexing
+   hudylookup per row is right in both modes. */
+{
+	byte *	source;
+	int		width, height, row, run;
+
+	width = pic->width;
+	height = pic->height;
+	source = &pic->data;
+	x *= hudscale;
+	y *= hudscale;
+
+	/* Clipped on both axes.  The caller's icon fits its box at hudscale 1 and
+	   the original copied blind, but the pic is hudscale times larger with an
+	   HD pack while hudWidth may not be -- it is windowWidth outside HD. */
+	run = width;
+	if (x < 0 || x >= hudWidth)
+		return;
+	if (x+run > hudWidth)
+		run = hudWidth-x;
+
+	for (row = 0 ; row < height ; row++, source += width)
+	{
+		if (y+row < 0 || y+row >= hudHeight)
+			continue;
+		memcpy(hudylookup[y+row]+x,source,run);
 	}
 }
 
@@ -165,8 +268,8 @@ void VI_DrawMaskedPic(int x, int y, pic_t  *pic)
  byte *dest, *source;
  int  width, height, xcor;
 
- x -= pic->orgx;
- y -= pic->orgy;
+ x=(x-pic->orgx)*hudscale;
+ y=(y-pic->orgy)*hudscale;
  height=pic->height;
  source=&pic->data;
  while (y<0)
@@ -177,14 +280,15 @@ void VI_DrawMaskedPic(int x, int y, pic_t  *pic)
    }
  while (height--)
   {
-   if (y<200)
+   /* was a literal 200 and 319: the chrome buffer is hudscale times larger */
+   if (y<SCREENHEIGHT*hudscale)
     {
      dest=ylookup[y]+x;
      xcor=x;
      width=pic->width;
      while (width--)
       {
-       if (xcor>=0 && xcor<=319 && *source) *dest=*source;
+       if (xcor>=0 && xcor<screenpitch && *source) *dest=*source;
        xcor++;
        source++;
        dest++;
@@ -201,8 +305,8 @@ void VI_DrawTransPicToBuffer(int x,int y,pic_t *pic)
  byte *dest,*source;
  int  width,height;
 
- x -= pic->orgx;
- y -= pic->orgy;
+ x=(x-pic->orgx)*hudscale;
+ y=(y-pic->orgy)*hudscale;
  height=pic->height;
  source=&pic->data;
  while (y<0)
@@ -237,6 +341,8 @@ void VI_DrawMaskedPicToBuffer2(int x,int y,pic_t *pic)
 
 // x-=pic->orgx;
 // y-=pic->orgy;
+ x*=hudscale;
+ y*=hudscale;
  height=pic->height;
  source=&pic->data;
 
@@ -334,8 +440,8 @@ void VI_DrawMaskedPicToBuffer(int x,int y,pic_t *pic)
 	byte *	source;
 	int		width,height,xcor;
 
-	x -= pic->orgx;
-	y -= pic->orgy;
+	x = (x - pic->orgx) * hudscale;
+	y = (y - pic->orgy) * hudscale;
 	height = pic->height;
 	source = &pic->data;
 	while (y<0) 

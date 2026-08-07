@@ -163,6 +163,53 @@ static void maybe_shot(void)
 }
 
 
+/* TEMPORARY -- headless input hook, the sibling of GREED_SHOT.
+
+   The menus are driven by keyboard[] scancodes, and Windows will not let a
+   script-launched process take focus, so there is otherwise no way to reach a
+   dialog like ShowQuit without a human at the keyboard -- which makes the
+   sliding-box paths untestable exactly where they were broken.
+
+   Holds each scancode down over a window of ticks rather than pulsing it for
+   one, because that is what MenuCommand expects: it edge-detects Enter through
+   `enterheld` and rate-limits the arrows against `timedelay`, so a single-tick
+   press is missed about as often as it is caught.
+
+     GREED_KEYS=<tick>:<scancode>[:<hold>],...      scancode in 0x.. or decimal
+
+   e.g. GREED_KEYS=60:0x50:6,80:0x1c:6 -- down onto QUIT, then Enter.  Remove
+   along with GREED_SHOT once the port has been played through by hand. */
+static void maybe_keys(void)
+{
+    const char *spec = getenv("GREED_KEYS");
+    char        list[512];
+    char       *tok, *save;
+    longint     now;
+
+    if (!spec)
+        return;
+
+    now = timecount / 2;              /* timecount runs in half-ticks */
+    SDL_strlcpy(list, spec, sizeof(list));
+
+    for (tok = strtok_r(list, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+        long  at, sc, hold = 4;
+        char *p;
+
+        at = strtol(tok, &p, 0);
+        if (*p != ':')
+            continue;
+        sc = strtol(p + 1, &p, 0);
+        if (*p == ':')
+            hold = strtol(p + 1, &p, 0);
+        if (sc <= 0 || sc >= NUMCODES)
+            continue;
+        if (now >= at && now < at + hold)
+            keyboard[sc] = true;
+    }
+}
+
+
 void Sys_Frame(void)
 {
     SDL_Event ev;
@@ -173,6 +220,7 @@ void Sys_Frame(void)
         handle_event(&ev);
 
     Sys_RefreshKeys();
+    maybe_keys();          /* after the refresh, which rebuilds keyboard[] */
 
     now = SDL_GetTicks();          /* Uint64 in SDL3 */
     if (!clock_started) {

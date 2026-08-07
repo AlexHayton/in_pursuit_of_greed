@@ -117,6 +117,53 @@ typedef struct
   short collumnofs[256];   // only uses [width] entries
   } scalepic_t;
 
+/* The widened sprite layout a 4x art pack uses.
+
+   The 1995 one (source_dos/SGRAB/DOOMGRB.C) is scalepic_t above, followed by
+   per column { byte top; byte bottom; byte pixels[top-bottom+1] }, where top
+   and bottom are heights above the sprite's baseline.  Measured against the
+   archive, every one of those fields overflows at 4x: the widest sprite goes
+   from 176 to 704 columns against a 256-entry table, the largest column offset
+   from 21544 to 344704 against an int16, and the tallest top from 195 to 780
+   against a byte.  So the container fails before the arithmetic does.
+
+   The widened form keeps the same field order and meaning, only wider:
+     { short leftoffset, width; int collumnofs[width]; }
+   then per column { short top; short bottom; byte pixels[] }.
+
+   spriteshift selects between them -- 0 for the original art, 2 for a 4x pack
+   -- so the two never coexist and one global is enough.  leftoffset and width
+   sit at the same offsets with the same type in both, and need no branch. */
+typedef struct
+ {
+  short leftoffset, width;
+  int   collumnofs[1];     // really [width]
+  } scalepichd_t;
+
+#define SP_WIDTH(p)     (((scalepic_t *)(p))->width)
+#define SP_LEFTOFS(p)   (((scalepic_t *)(p))->leftoffset)
+#define SP_COLOFS(p,c)  (spriteshift ? ((scalepichd_t *)(p))->collumnofs[c]   \
+				     : (int)((scalepic_t *)(p))->collumnofs[c])
+#define SP_COLHDR       (spriteshift ? 4 : 2)
+#define SP_TOP(col)     (spriteshift ? (int)((short *)(col))[0] : (int)((byte *)(col))[0])
+#define SP_BOTTOM(col)  (spriteshift ? (int)((short *)(col))[1] : (int)((byte *)(col))[1])
+
+/* Mapping a sprite lump onto the 2D chrome.
+
+   A handful of places -- the inventory and bonus-item icons, the holo -- blit
+   sprite lumps straight into the chrome rather than through the 3D path.  They
+   were written when both sides were one pixel per 320x200 unit.  Now sprite art
+   is (1<<spriteshift) texels per unit and the chrome is hudscale pixels per
+   unit, so those two have to be reconciled or a 4x sprite overruns the 30x30
+   box the caller memsets.
+
+   SP_HUDLEN converts a length in sprite texels to one in chrome pixels, and
+   SP_HUDSRC maps a chrome pixel back to the texel to sample.  When the two
+   scales match -- the shipping case, hudscale 4 with spriteshift 2 -- both are
+   the identity and this costs nothing. */
+#define SP_HUDLEN(n)    (((n)*hudscale)>>spriteshift)
+#define SP_HUDSRC(i)    (((i)<<spriteshift)/hudscale)
+
 typedef struct
  {
   fixed_t tx, ty, tz;

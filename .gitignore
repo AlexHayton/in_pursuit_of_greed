@@ -13,6 +13,17 @@ build-*/
 # Framebuffer dumps from GREED_SHOT / GREED_REPRO
 *.ppm
 
+# Generated upscaled art (tools/hdtex).  The sidecar parts (GREED_HD.NNN.BLO,
+# ~43 MB each) and the upscaled cutscenes (greed_final/MOVIES, 283 MB) ARE
+# committed, so a clone is playable without a GPU -- the VSR cutscene backend is
+# Windows-only and macOS cannot rebuild them.  Two things are still ignored:
+#
+#   the *unsplit* pack, which pack.py --part-mb 0 writes and which GitHub would
+#   reject outright at 209 MB; and
+#   MOVIES_<something>, the parked comparison sets a backend A/B leaves behind.
+greed_final/GREED_HD.BLO
+greed_final/MOVIES_*/
+
 # Editor / tooling
 compile_commands.json
 .cache/

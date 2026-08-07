@@ -148,12 +148,12 @@ void fli_linecompression(void)
  y2=getword();               // number of lines to change
  for (y2+=y;y<y2;y++)
   {
-   /* An explicit 320 stride, not viewylookup: the FLI decoder treats viewbuffer
-      as a packed 320x200 scratch frame -- the whole-frame reader above walks it
-      linearly and the flip below memcpy's 64000 bytes of it straight to
-      `screen`.  viewylookup rows are windowWidth apart, which is only 320 while
-      the view happens to be full width. */
-   line=viewbuffer+y*SCREENWIDTH;
+   /* The movie's own width, not viewylookup and not a 320 constant: the FLI
+      decoder treats viewbuffer as a packed frame of header.width x
+      header.height -- the whole-frame reader above walks it linearly and the
+      blit below scales it to the chrome.  viewylookup rows are windowWidth
+      apart, which is a different number again. */
+   line=viewbuffer+y*header.width;
    packets=getbyte();
    for (p=0;p<packets;p++)
     {
@@ -199,13 +199,13 @@ void fli_readframe(FILE *f)
       fli_brun();
       break;
      case 16:  // copy chunk
-      memcpy(viewbuffer,chunkbuf,64000);
+      memcpy(viewbuffer,chunkbuf,(size_t)header.width*header.height);
       break;
      case 11:  //  new palette
       fli_readcolors();
       break;
      case 13:  //  clear (only 1 usually at beginning)
-      memset(viewbuffer,0,64000);
+      memset(viewbuffer,0,(size_t)header.width*header.height);
       break;
      }
    }
@@ -235,16 +235,22 @@ bool playfli(char *fname,longint offset)
  longint delay;
 
  newascii=false;
- chunkbuf=(byte *)malloc(64000);
- if (chunkbuf==NULL) 
-  MS_Error("PlayFLI: Out of Memory with ChunkBuf!");
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
  VI_FillPalette(0,0,0);
  f=fopen(fname,"rb");
  if (f==NULL) 
   MS_Error("PlayFLI: File Not Found: %s",fname);
  if (fseek(f,offset,0) || !fread(&header,sizeof(fliheader),1,f))
   MS_Error("PlayFLI: File Read Error: %s",fname);
+ /* Sized from the header rather than a fixed 64000: a 4x cutscene is 1280x800,
+    and a COPY chunk carries a whole uncompressed frame.  The header has to be
+    read first, which is why this moved below the fread. */
+ if ((longint)header.width*header.height > (longint)MAX_VIEW_WIDTH*MAX_VIEW_HEIGHT)
+  MS_Error("PlayFLI: %s is %dx%d, larger than the view buffer",
+	    fname,header.width,header.height);
+ chunkbuf=(byte *)malloc((size_t)header.width*header.height*2);
+ if (chunkbuf==NULL) 
+  MS_Error("PlayFLI: Out of Memory with ChunkBuf!");
  currentfliframe=0;
  delay=timecount;
  while (currentfliframe++<header.nframes && !newascii && !quitgame) // newascii=user break
@@ -260,13 +266,17 @@ bool playfli(char *fname,longint offset)
      Sys_PumpFrame();
      if (quitgame) break;
      }
-   memcpy(screen,viewbuffer,64000);       // copy
+   /* Scale into the chrome rather than copying at the wrong pitch: a movie is
+      whatever size its own header says.  The shipped set is 640x400, upscaled
+      offline by tools/hdtex, so this point-doubles it into the 1280x800 HD
+      chrome and point-samples it back down to 320x200 in the original one. */
+   VI_BlitLogical(viewbuffer,header.width,header.height);
    }
  fclose(f);
  free(chunkbuf);
  if (currentfliframe<header.nframes) // user break
   {
-   memset(screen,0,64000);
+   memset(screen,0,SCREENBYTES);
    return false;
    }
  else return true;

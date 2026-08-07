@@ -212,7 +212,7 @@ void RenderDoor(void)
  wall=lumpmain[walllump+walltype];
  ceilingheight=vertex[0]->ceilingheight;
  floorh=-vertex[0]->floorheight;
- postindex=wallposts+(walltype<<6);      // 64 pointers to texture starts
+ postindex=wallposts+(walltype<<texshift);  // one pointer per texture column
  baseangle+=viewfineangle;
  absdistance=distance<0?-distance : distance;
  // step through the individual posts
@@ -229,8 +229,9 @@ void RenderDoor(void)
    if (pointz>MAXZ || pointz<MINZ) continue;
 
    // calculate the texture post along the wall that was hit
-   texture=(textureadjust+FIXEDMUL(distance, tangents[angle]))>>FRACBITS;
-   texture&=63;
+   /* world coordinate -> texel index; see the note in R_walls.c DrawWall */
+   texture=(textureadjust+FIXEDMUL(distance, tangents[angle]))>>(FRACBITS-texscaleshift);
+   texture&=texmask;
    sp_source=postindex[texture];
 
    // post the span in the draw list
@@ -322,7 +323,7 @@ part2:
  wall=lumpmain[walllump+walltype];
  ceilingheight=vertex[0]->ceilingheight;
  floorh=-vertex[0]->floorheight;
- postindex=wallposts+(walltype<<6);      // 64 pointers to texture starts
+ postindex=wallposts+(walltype<<texshift);  // one pointer per texture column
  baseangle+=viewfineangle;
  absdistance=distance<0?-distance : distance;
  // step through the individual posts
@@ -340,8 +341,9 @@ part2:
    if (pointz<MINZ) continue;
 
    // calculate the texture post along the wall that was hit
-   texture=(textureadjust+FIXEDMUL(distance, tangents[angle]))>>FRACBITS;
-   texture&=63;
+   /* world coordinate -> texel index; see the note in R_walls.c DrawWall */
+   texture=(textureadjust+FIXEDMUL(distance, tangents[angle]))>>(FRACBITS-texscaleshift);
+   texture&=texmask;
    sp_source=postindex[texture];
 
    // post the span in the draw list
@@ -422,7 +424,7 @@ part3:
  // set up for loop
  walltype=2;
  wall=lumpmain[walllump+walltype];
- postindex=wallposts+(walltype<<6);      // 64 pointers to texture starts
+ postindex=wallposts+(walltype<<texshift);  // one pointer per texture column
  baseangle+=viewfineangle;
  absdistance=distance<0?-distance : distance;
  // step through the individual posts
@@ -440,8 +442,9 @@ part3:
    if (pointz<MINZ) continue;
 
    // calculate the texture post along the wall that was hit
-   texture=(textureadjust+FIXEDMUL(distance, tangents[angle]))>>FRACBITS;
-   texture&=63;
+   /* world coordinate -> texel index; see the note in R_walls.c DrawWall */
+   texture=(textureadjust+FIXEDMUL(distance, tangents[angle]))>>(FRACBITS-texscaleshift);
+   texture&=texmask;
    sp_source=postindex[texture];
 
    // post the span in the draw list

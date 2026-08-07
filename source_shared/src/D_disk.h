@@ -48,6 +48,8 @@ extern fileinfo_t fileinfo;     // the file header
 extern lumpinfo_t *infotable;   // pointers into the cache file
 extern void       **lumpmain;   // pointers to the lumps in main memory
 extern int        cachehandle;  // handle of current file
+/* hdart / hdartavail live in r_public.h, next to hdmode: the renderer reads
+   them (TEXELSTEP) far more often than the archive code does. */
 
 
 
@@ -56,6 +58,9 @@ extern int        cachehandle;  // handle of current file
 void CA_ReadFile(char *name,void *buffer,unsigned length);
 void *CA_LoadFile(char *name);
 void CA_InitFile(char *filename);
+int  CA_OverlayFile(char *filename);
+void CA_OverlayArt(char *stem);
+void CA_SetArtMode(int hd);
 int  CA_CheckNamedNum(char *name);
 int  CA_GetNamedNum(char *name);
 void *CA_CacheLump(int lump);

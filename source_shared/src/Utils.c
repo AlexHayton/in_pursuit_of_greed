@@ -262,11 +262,126 @@ void ActivateSlopes(void)
  }
 
 
+static void BuildWallPosts(void)
+/* Rebuild the per-wall column pointer table from the cached wall lumps.
+
+   Split out of LoadTextures so the art-set switch can rebuild it without also
+   running LoadTextures' level-transition work -- which frees every demand
+   sprite and would leave live monsters pointing at freed lumps. */
+{
+ int  i, x, size;
+ byte *base, *wall;
+
+ /* wallposts is byte**, so this must size by pointer.  The original *4 was the
+    32-bit pointer size; on LP64 it allocated half of what the loop below
+    writes, overflowing the heap and handing back NULL texture columns --
+    which crashed ScalePost the moment a wall came into view. */
+ /* calloc, not malloc: the loop below skips any wall that is not cached, and
+    an uninitialised pointer here crashes ScalePost the moment that wall comes
+    into view.  NULL at least faults predictably. */
+ if (wallposts)
+  free(wallposts);
+ wallposts=calloc((size_t)(numwalls+1)<<texshift,sizeof(byte *));
+ if (!wallposts)
+  MS_Error("BuildWallPosts: out of memory for %d walls",numwalls);
+
+ for (i=0;i<numwalls-1;i++)
+  {
+   wall=lumpmain[walllump+i+1];
+   if (wall)
+    {
+     base=wall+65*2;
+     /* the height field is 16 bits; `wall` is byte* here, so reading it
+	directly would take only the low byte -- harmless while the tallest
+	wall was 192 rows (48), wrong for a 4x pack (512 -> 128 still fits,
+	but 768 -> 192 is the last value that does). */
+     size=*(unsigned short *)wall*4;
+     for (x=0;x<(1<<texshift);x++)
+      wallposts[(i<<texshift)+x]=base+size*x;
+     }
+   }
+ }
+
+
+int skylump;    /* the BACKDROP lump pair this level uses; see LoadBackdrop */
+
+void LoadBackdrop(int lump)
+/* Assemble the sky from its two half-height lumps.
+
+   The backdrop is one SKYSIZE-square buffer built from two SKYSIZE x SKYSIZE/2
+   pics stacked, and it is sampled by wrapped (row, column) rather than drawn,
+   so it needs to be contiguous rather than left in the lump cache.
+
+   This used to lseek/read `cachehandle` directly at infotable[lump].filepos+8.
+   That skipped the 8-byte pic header, which is the only reason it worked -- and
+   it reads the wrong file entirely once an HD pack is loaded, because those
+   lumps then live on the sidecar's handle.  Going through CA_CacheLump picks up
+   whichever archive owns the lump. */
+{
+ size_t half=(size_t)SKYSIZE*(SKYSIZE/2);
+ byte   *p;
+
+ skylump=lump;
+ p=CA_CacheLump(lump);
+ memcpy(backdrop,p+8,half);
+ CA_FreeLump(lump);
+ p=CA_CacheLump(lump+1);
+ memcpy(backdrop+half,p+8,half);
+ CA_FreeLump(lump+1);
+
+ /* TEMPORARY -- test hook.  GREED_SKYTEST paints a one-texel checker over the
+    sky, which renders fine at SKYSIZE 1024 and four times coarser at 256; it
+    is the only unambiguous way to confirm the sampling really gained
+    resolution rather than replicating the same 256 columns. */
+ if (getenv("GREED_SKYTEST"))
+  {
+   int r,c;
+   for (r=0;r<SKYSIZE;r++)
+    for (c=0;c<SKYSIZE;c++)
+     backdrop[(size_t)r*SKYSIZE+c]=((r^c)&1)?15:0;
+   }
+ }
+
+
+void RF_ReloadArt(byte *wasresident)
+/* Re-cache everything that was resident before CA_SetArtMode freed it.
+
+   Driven by a snapshot of lumpmain rather than by class, because the working
+   set is not something this can reconstruct: which monsters are loaded depends
+   on the level, and which walls on the map.  Restoring exactly what was there
+   is both simpler and correct for every class at once.
+
+   Deliberately NOT LoadTextures: that is a level-transition routine which frees
+   every demand-loaded monster and reloads only the player's, on the assumption
+   that the sprites are respawned right after.  Called mid-game it leaves every
+   live monster's scaleobj_t pointing at a freed lump, and the next DrawSprite
+   dereferences it -- which is exactly the crash this replaced. */
+{
+ int i, spritestart, spriteend, demandstart, demandend;
+
+ spritestart=spritelump;
+ spriteend=spritelump+numsprites;
+ demandstart=CA_GetNamedNum("startdemand");
+ demandend=CA_GetNamedNum("enddemand");
+
+ for (i=0;i<fileinfo.numlumps;i++)
+  if (wasresident[i] && !lumpmain[i])
+   {
+    CA_CacheLump(i);
+    /* Sprite pixel data carries index 255 where the art means transparent;
+       DemandLoadMonster patches that on its own load path, and re-caching
+       here has to do the same. */
+    if ((i>spritestart && i<spriteend) || (i>demandstart && i<demandend))
+     PatchSpriteLump(lumpmain[i]);
+    }
+ BuildWallPosts();
+ }
+
+
 void LoadTextures(void)
 {
  char textures[256];
- int  i, x, size, numsprites, startsprites;
- byte *base, *wall;
+ int  i, numsprites, startsprites;
 
  startsprites=CA_GetNamedNum("startdemand");
  numsprites=CA_GetNamedNum("enddemand")-startsprites;
@@ -277,91 +392,33 @@ void LoadTextures(void)
  UpdateWait();
  if (debugmode)
   {
-   for (i=0;i<numwalls-1;i++)
-    {
-     wall=lumpmain[walllump+i+1];
-     base=wall+65*2;
-     size=*wall*4;
-     for (x=0;x<64;x++)
-      wallposts[i*64+x]=base+size*x;
-     }
+   BuildWallPosts();
    return;
    }
  UpdateWait();
- for(i=1;i<numwalls-7;i++) CA_FreeLump(walllump+i);
- UpdateWait();
  if (wallposts)
   free(wallposts);
- memset(textures,0,sizeof(textures));
- UpdateWait();
- for(i=0;i<MAPCOLS*MAPROWS;i++)
-  {
-   textures[northwall[i]]=1;
-   textures[westwall[i]]=1;
-   textures[floordef[i]]=1;
-   textures[ceilingdef[i]]=1;
-   }
- UpdateWait();
- textures[3]=1;    // for sides of doors
 
- if (textures[228] || textures[229] || textures[230])
-  {
-   textures[228]=1;  // animation textures
-   textures[229]=1;
-   textures[230]=1;
-   }
- if (textures[172] || textures[173])
-  {
-   textures[172]=1;  // switch textures
-   textures[173]=1;
-   }
- if (textures[127] || textures[128])
-  {
-   textures[127]=1;
-   textures[128]=1;
-   }
- if (textures[75] || textures[76])
-  {
-   textures[75]=1;
-   textures[76]=1;
-   }
- if (textures[140] || textures[141])
-  {
-   textures[140]=1;
-   textures[141]=1;
-   }
- if (textures[234] || textures[235])
-  {
-   textures[234]=1;
-   textures[235]=1;
-   }
+ /* Cache every wall once, rather than freeing the whole set each level and
+    re-caching only the ones this map references.
 
- UpdateWait();
+    The demand loading existed because DOS could not hold all 262 walls at
+    1.7 MB.  A 4x pack makes the full set 27 MB, which is still nothing, and
+    holding it removes a whole class of bug: the marking below had to
+    special-case six animation groups (228-230, 172/173, 127/128, 75/76,
+    140/141, 234/235) by hand, and any wall it missed left an uninitialised
+    wallposts entry pointing at nothing.  It also read textures[256..262],
+    seven bytes off the end of a char[256] on the stack, because numwalls is
+    263 -- endwalls minus startwalls counts the marker lump.
+
+    The flats half below already caches unconditionally; this just makes the
+    walls agree with it. */
  for(i=1;i<numwalls;i++)
-  if (textures[i])
-   {
-    CA_CacheLump(walllump+i);
-    UpdateWait();
-    }
- /* wallposts is byte**, so this must size by pointer.  The original *4 was the
-    32-bit pointer size; on LP64 it allocated half of what the loop below
-    writes, overflowing the heap and handing back NULL texture columns --
-    which crashed ScalePost the moment a wall came into view. */
- wallposts=malloc((size_t)(numwalls+1)*64*sizeof(byte *));
- UpdateWait();
-
-	for ( i = 0 ; i < numwalls - 1 ; i++ )
-	{
-		wall = lumpmain[walllump + i + 1];
-		if ( wall )
-		{
-			base = wall + 65 * 2;
-			size = *wall * 4;
-			for ( x = 0 ; x < 64 ; x++ )
-				wallposts[i * 64 + x] = base + size * x;
-		}
-	}
-
+  {
+   CA_CacheLump(walllump+i);
+   if (!(i&15)) UpdateWait();
+   }
+ BuildWallPosts();
  UpdateWait();
  for(i=1;i<numflats;i++) CA_FreeLump(flatlump+i);
  UpdateWait();
@@ -538,6 +595,70 @@ void LoadNewMap(int lump)
  UpdateWait();
  LoadTextures();
  CheckMapFlats();
+ }
+
+
+void RF_SetArtMode(int hd)
+/* Switch between the original art and the 4x pack.
+
+   Driven by the renderer mode: ORIGINAL uses the original lumps, HD uses the
+   upscaled ones, so the one control the player already has means "how good
+   should this look".  Called from the two places that apply a mode change,
+   Menu.c on the way out of the options screen and Raven.c on a deferred
+   resize -- both at a point where no part of a frame has been drawn yet.
+
+   Everything re-cached below holds a raw pointer *into* lumpmain, and
+   CA_SetArtMode has just freed the lumps under them.  Missing one leaves a
+   dangling pointer that draws garbage or faults, so this list must stay in
+   step with LoadMiscData in Intro.c. */
+{
+ int i;
+ byte *wasresident;
+ static const char *statbars[4]={"STATBAR1","STATBAR2","STATBAR3","STATBAR4"};
+
+ if (!hdartavail) return;
+ if ((hd?1:0)==hdart) return;
+
+ /* Snapshot the working set before CA_SetArtMode frees any of it. */
+ wasresident=malloc(fileinfo.numlumps);
+ if (!wasresident) MS_Error("RF_SetArtMode: out of memory");
+ for (i=0;i<fileinfo.numlumps;i++)
+  wasresident[i]=lumpmain[i]?1:0;
+
+ CA_SetArtMode(hd);
+ /* Re-lay the chrome buffer before anything caches a pointer into it or draws
+    through ylookup: CA_SetArtMode has just changed hudscale. */
+ VI_SetHudScale(hudscale);
+
+ font1=CA_CacheLump(CA_GetNamedNum("FONT1"));
+ font2=CA_CacheLump(CA_GetNamedNum("FONT2"));
+ font3=CA_CacheLump(CA_GetNamedNum("FONT3"));
+ font=font1;
+ for (i=0;i<4;i++)
+  statusbar[i]=CA_CacheLump(CA_GetNamedNum((char *)statbars[i]));
+ for (i=0;i<10;i++)
+  heart[i]=CA_CacheLump(CA_GetNamedNum("HEART")+i);
+
+ /* wallposts is only allocated once a level has been loaded; before that
+    RF_PreloadGraphics has yet to run and there is nothing to rebuild. */
+ /* The sky buffer's size follows skyshift, and its contents are assembled from
+    lumps the switch just replaced, so both have to be redone. */
+ if (backdrop)
+  {
+   free(backdrop);
+   backdrop=malloc((size_t)SKYSIZE*SKYSIZE);
+   if (!backdrop) MS_Error("RF_SetArtMode: out of memory for the backdrop");
+   for (i=0;i<SKYSIZE;i++)
+    backdroplookup[i]=(byte *)backdrop+SKYSIZE*i;
+   if (skylump) LoadBackdrop(skylump);
+   }
+
+ if (wallposts)
+  {
+   RF_ReloadArt(wasresident);
+   loadweapon(player.weapons[player.currentweapon]);
+   }
+ free(wasresident);
  }
 
 
@@ -765,7 +886,7 @@ int MaxViewSize(void)
    them and the HD view is left alone.  4 and up shrink the view, which is
    what HD has to refuse. */
 {
- return hdmode ? HDMAXVIEWSIZE : MAXVIEWSIZE-1;
+ return hdmode ? MAXHDVIEWSIZE : MAXVIEWSIZE-1;
  }
 
 
@@ -773,10 +894,19 @@ void ChangeViewSize(byte MakeLarger)
 {
  int lastviewsize;
 
- /* This used to return immediately in HD, which cost more than the view size:
-    resizeScreen is cleared below and PlayerCommand will not accept another
-    F9/F10 until it is, so one press killed both keys for the rest of the run.
-    The HD restriction is the size limit above, not the whole function. */
+ /* In HD the view size is the render resolution, chosen by VI_ApplyRenderMode
+    from the display, and the viewSizes[] table does not apply -- so this used
+    to refuse every size in HD.  That was too broad, and it took the status bar
+    with it: sizes 0..3 are all 320x200 in viewSizes[] and differ only in how
+    much status bar chrome is drawn over the view, which composites at any
+    resolution.  Only 4 and up actually shrink the view, so only those are
+    refused.  With the blanket guard, F9/F10 did nothing at all in HD and there
+    was no way to get a status bar on screen.
+
+    The refusal is the MaxViewSize() limit further down and not an early return
+    here, because that costs more than the view size: resizeScreen is cleared
+    below and PlayerCommand will not accept another F9/F10 until it is, so one
+    press at the limit killed both keys for the rest of the run. */
 
  if (SC.vrhelmet==1)
   {
@@ -816,7 +946,7 @@ void ChangeViewSize(byte MakeLarger)
  resetdisplay();
  if (currentViewSize>=5)
   {
-   memset(screen,0,64000);
+   memset(screen,0,SCREENBYTES);
    VI_DrawPic(4,149,statusbar[2]);
    }
  if (currentViewSize>=4) VI_DrawMaskedPic(0,0,statusbar[3]);
@@ -1555,7 +1685,7 @@ void EndGame1(void)
  BriefingWaitKey();
  if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
  loadscreen("SOFTLOGO");
  VI_FadeIn(0,256,colors,48);
@@ -1563,7 +1693,7 @@ void EndGame1(void)
  BriefingWaitKey();
  if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
  loadscreen("CREDITS1");
  VI_FadeIn(0,256,colors,48);
@@ -1571,7 +1701,7 @@ void EndGame1(void)
  BriefingWaitKey();
  if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
  loadscreen("CREDITS2");
  VI_FadeIn(0,256,colors,48);
@@ -1579,7 +1709,7 @@ void EndGame1(void)
  BriefingWaitKey();
  if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
 #ifndef ASSASSINATOR
  loadscreen("CREDITS3");
@@ -1588,7 +1718,7 @@ void EndGame1(void)
  BriefingWaitKey();
  if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 #endif
 
  redo=true;
@@ -1644,7 +1774,7 @@ void EndGame2(void)
  BriefingWaitKey();
  if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
  loadscreen("SOFTLOGO");
  VI_FadeIn(0,256,colors,48);
@@ -1652,7 +1782,7 @@ void EndGame2(void)
  BriefingWaitKey();
  if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
  loadscreen("CREDITS1");
  VI_FadeIn(0,256,colors,48);
@@ -1660,7 +1790,7 @@ void EndGame2(void)
  BriefingWaitKey();
  if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
  loadscreen("CREDITS2");
  VI_FadeIn(0,256,colors,48);
@@ -1668,7 +1798,7 @@ void EndGame2(void)
  BriefingWaitKey();
  if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
  loadscreen("CREDITS3");
  VI_FadeIn(0,256,colors,48);
@@ -1676,7 +1806,7 @@ void EndGame2(void)
  BriefingWaitKey();
  if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
  redo=true;
  }
@@ -1763,7 +1893,7 @@ void EndGame3(void)
  BriefingWaitKey();
  if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
  loadscreen("SOFTLOGO");
  VI_FadeIn(0,256,colors,48);
@@ -1771,7 +1901,7 @@ void EndGame3(void)
  BriefingWaitKey();
  if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
  loadscreen("CREDITS1");
  VI_FadeIn(0,256,colors,48);
@@ -1779,7 +1909,7 @@ void EndGame3(void)
  BriefingWaitKey();
  if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
  loadscreen("CREDITS2");
  VI_FadeIn(0,256,colors,48);
@@ -1787,7 +1917,7 @@ void EndGame3(void)
  BriefingWaitKey();
  if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
  loadscreen("CREDITS3");
  VI_FadeIn(0,256,colors,48);
@@ -1795,7 +1925,7 @@ void EndGame3(void)
  BriefingWaitKey();
  if (quitgame) return;
  VI_FadeOut(0,256,0,0,0,48);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
 
  redo=true;
  }
@@ -1988,6 +2118,13 @@ void newplayer(int map,int chartype,int difficulty)
  player.scrollmax=windowHeight;
  player.x=-1;
  player.map=map;
+ /* TEMPORARY -- test hook, like GREED_SHOT and GREED_MODE.  GREED_MAP=<n>
+    starts a new game on that map instead of the first, which is the only way
+    to reach the thirteen levels that actually have sky without playing there. */
+ {
+  const char *m=getenv("GREED_MAP");
+  if (m && atoi(m)>0) player.map=atoi(m);
+ }
  player.height=pheights[chartype];
  player.maxangst=pmaxangst[chartype];
  player.maxshield=pmaxshield[chartype];
@@ -2167,13 +2304,20 @@ void MissionBriefing(int map)
  byte *scr;
  byte basep[768];
 
- if ( netmode || nointro ) 
+ /* TEMPORARY -- test hook, like GREED_SHOT and GREED_MODE.  GREED_BRIEF=1 runs
+    the briefing even under -nointro.  Without it this whole function is
+    unreachable in any headless test, which is exactly how a crash in it
+    survived a full session of them; CLAUDE.md warns about this specific trap. */
+ if ( netmode || (nointro && !getenv("GREED_BRIEF")) )
 	 return;
 
- scr=(byte *)malloc(64000);
+ scr=(byte *)malloc(HUD_MAXWIDTH*HUD_MAXHEIGHT);
  if (scr==NULL)
   MS_Error("Error allocating MissonBriefing buffer");
- memcpy(scr,viewbuffer,64000);
+ /* SCREENBYTES, not 64000: `scr` is HUD_MAXWIDTH*HUD_MAXHEIGHT and viewbuffer
+    is larger still, so a fixed 64000 preserved only the top 50 rows of what
+    the caller had in viewbuffer.  Paired with the restore at `end:`. */
+ memcpy(scr,viewbuffer,SCREENBYTES);
 
  oldtimecount=timecount;
 
@@ -2500,9 +2644,9 @@ void MissionBriefing(int map)
    }
 
 end:
- memcpy(viewbuffer,scr,64000);
+ memcpy(viewbuffer,scr,SCREENBYTES);
  free(scr);
- memset(screen,0,64000);
+ memset(screen,0,SCREENBYTES);
  VI_SetPalette(CA_CacheLump(CA_GetNamedNum("palette")));
  timecount=oldtimecount;
  }

@@ -257,6 +257,44 @@ extern int     viewscroll;     /* look up/down range in view rows */
 extern int     viewclipy;      /* ceiling-polygon reject bound; see R_public.c */
 extern int     viewminscale;   /* near cutoff on the texel step; see R_public.c */
 
+/* Texture resolution.
+
+   The engine was written with one texel per world unit, so TILESHIFT 6 meant a
+   64-unit tile and a 64-texel wall were the same number and the two were used
+   interchangeably -- `texture&=63` indexes a wall column with a world
+   coordinate.  A 4x texture pack breaks that identity: the tile is still 64
+   units (TILESHIFT does NOT change) but the wall is 256 texels across, so
+   world coordinates need scaling up before they index texture space.
+
+   texshift       log2 of the wall width: 6 originally, 8 for a 4x pack
+   texscaleshift  texshift-TILESHIFT, i.e. log2 texels per world unit: 0 or 2
+   texmask        (1<<texshift)-1, the column wrap mask
+   flatshift/flatscaleshift/flatmask   the same three for flats
+   spriteshift    extra sprite texel density beyond scaleobj_t.scale: 0 or 2
+   hudscale       chrome upscale factor for 320x200-authored art: 1 or 4
+
+   Walls and flats are kept separate even though a finished pack upscales both,
+   because the pack is built and tested one class at a time -- a sidecar holding
+   only 256px flats must not tell the renderer that walls are 256px too.
+
+   These are runtime, not compile-time, so one binary runs either art set --
+   the HD pack is optional and the game must still work without it.  They are
+   set once from the sidecar's header (CA_OverlayArt) and never change after,
+   because the cached lump pointers in weaponpic[]/statusbar[]/font would
+   dangle if the art were swapped mid-game. */
+extern int     texshift, texscaleshift, texmask;
+extern int     flatshift, flatscaleshift, flatmask;
+extern int     spriteshift, hudscale;
+/* The backdrop/sky.  It is a 256x256 buffer assembled from two 256x128 lumps
+   and sampled by (row, column) with the column wrapping, so it scales the same
+   way the flats do: 0 or 2, giving 256 or 1024 on a side.  Kept separate from
+   texshift/flatshift because the sky is built and packed with the pics. */
+extern int     skyshift, skymask;
+#define SKYSIZE  (256<<skyshift)
+/* Defined in D_disk.c, which owns the sidecar.  hdart is 1 when the 4x pack is
+   the active art set; hdartavail is 1 when a pack was found at all. */
+extern int     hdart, hdartavail;
+
 /* Texels per screen row for a post at depth z.
 
    The engine spells this FIXEDMUL(z,ISCALE) with ISCALE = FRACUNIT/proj, an
@@ -264,9 +302,13 @@ extern int     viewminscale;   /* near cutoff on the texel step; see R_public.c 
    the original 160, but 0.45% at an HD scale of 659.  That error is a texture
    step, so it accumulates down the post and varies from column to column with
    z -- which reads as a zigzag along horizontal features on near walls.
-   Dividing directly is exact to 1/65536.  Original mode keeps the historical
-   expression so its output is unchanged. */
-#define TEXELSTEP(z)   (hdmode ? (fixed_t)((z)/viewproj) : FIXEDMUL((z),ISCALE))
+   Dividing directly is exact to 1/65536.
+
+   Also taken when a 4x art pack is active, even in original render mode: the
+   same -0.146% is 0.19 texel over a 128-row post but 0.75 over a 512-row one.
+   Original mode on original art keeps the historical expression, so its output
+   is unchanged. */
+#define TEXELSTEP(z)   ((hdmode||hdart) ? (fixed_t)((z)/viewproj) : FIXEDMUL((z),ISCALE))
 /* Target for the 2D chrome; aliases the view buffer or `screen`.  See
    R_public.c.  Anything drawing 320x200-authored artwork uses these, never
    viewylookup/windowWidth directly. */

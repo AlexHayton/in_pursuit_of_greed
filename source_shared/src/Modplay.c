@@ -233,11 +233,30 @@ void InitSound(void)
    else printf("Success\n");
    }
 
+ /* TEMPORARY -- test hook, like GREED_SHOT in sys_main.c.  GREED_MODE=original
+    or =hd forces the renderer mode without touching SETUP.CFG, which is what
+    makes an automated original-vs-HD comparison possible: the shipped
+    SETUP.CFG predates the magic header, so LoadSetup rejects it and the
+    defaults above always win.  Remove once the port is settled.  Ahead of the
+    screen size clamp below, which depends on SC.hdmode. */
+ {
+  const char *mode=getenv("GREED_MODE");
+  if (mode)
+   {
+    if (!stricmp(mode,"original")) SC.hdmode=0;
+    else if (!stricmp(mode,"hd")) SC.hdmode=1;
+   }
+ }
+
  /* Range-check rather than force.  This used to be a flat `SC.screensize=0`,
     on the grounds that the options menu no longer has the screen-size slider
     to undo a bad value -- but 0 is the one size that draws no HUD at all, so
-    that pinned the game to a bare view and made F9/F10 pointless. */
+    that pinned the game to a bare view and made F9/F10 pointless.  F9/F10 in
+    play are the control now, so a bad value is recoverable and only the range
+    needs enforcing.  hdmode is not established yet -- the renderer is built
+    later, from SC.hdmode -- so clamp against that. */
  if (SC.screensize<0 || SC.screensize>MAXVIEWSIZE-1) SC.screensize=3;
+ if (SC.hdmode && SC.screensize>MAXHDVIEWSIZE) SC.screensize=MAXHDVIEWSIZE;
 
  /* The camera delay row gave up its place in the options menu to the screen
     size, so nothing can set this any more: pin it to the minimum, which is the

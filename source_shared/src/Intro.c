@@ -303,19 +303,19 @@ void DoIntroMenu(void)
  byte *temp, oldcolors[768];
 
  memcpy(oldcolors,colors,768);
- temp=(byte *)malloc(64000);
+ temp=(byte *)malloc(HUD_MAXWIDTH*HUD_MAXHEIGHT);
  if (temp==NULL) MS_Error("DoIntroMenu: No memory for temp screen");
- memcpy(temp,screen,64000);
- memset(screen,0,64000);
+ memcpy(temp,screen,SCREENBYTES);
+ memset(screen,0,SCREENBYTES);
  VI_SetPalette(CA_CacheLump(CA_GetNamedNum("palette")));
  player.timecount=timecount;
  ShowMenu(0);
  if (!quitgame && !gameloaded)
   {
-   memset(screen,0,64000);
+   memset(screen,0,SCREENBYTES);
    memcpy(colors,oldcolors,768);
    VI_SetPalette(colors);
-   memcpy(screen,temp,64000);
+   memcpy(screen,temp,SCREENBYTES);
    }
  free(temp);
  timecount=player.timecount;
@@ -719,12 +719,12 @@ void LoadMiscData(void)
  for(i=0;i<10;i++)
   heart[i]=CA_CacheLump(CA_GetNamedNum("HEART")+i);
  printf(".");
- backdrop=malloc(256*256);
+ backdrop=malloc((size_t)SKYSIZE*SKYSIZE);
  if (backdrop==NULL)
   MS_Error("Out of memory for BackDrop");
  printf(".");
- for(i=0;i<256;i++)
-  backdroplookup[i]=(byte*)backdrop+256*i;
+ for(i=0;i<SKYSIZE;i++)
+  backdroplookup[i]=(byte*)backdrop+SKYSIZE*i;
  printf(".");
  }
 
@@ -767,6 +767,12 @@ void LoadData(void)
    nointro=true;
    }
  InitSound();
+ /* After InitSound, because SC.hdmode is not known until LoadSetup has run,
+    and before RF_PreloadGraphics, so the art matches the mode we start in.
+    An absent pack is not an error; the game just runs on the original art. */
+ if (!MS_CheckParm("noHD"))
+  CA_OverlayArt("GREED_HD");
+ CA_SetArtMode(SC.hdmode);
  INT_Setup();
  checkexit();
  RF_PreloadGraphics();

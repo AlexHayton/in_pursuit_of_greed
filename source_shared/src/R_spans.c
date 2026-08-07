@@ -188,16 +188,23 @@ void DrawDoorPost(void)
    sp_colormap=zcolormap[light];
    }
 
- sp_fracstep=TEXELSTEP(pointz);
+ /* `scale` above is the geometry step and projects the post; this is the
+    texture step.  Identical while one texel was one world unit; see DrawWall. */
+ sp_fracstep=TEXELSTEP(pointz)<<texscaleshift;
  top=FIXEDDIV(span_p->y,scale);
  topy=top>>FRACBITS;
  fracadjust=top&(FRACUNIT-1);
  sp_frac=FIXEDMUL(fracadjust,sp_fracstep);
  topy=CENTERY-topy;
- sp_loopvalue=256<<FRACBITS;
+ /* Doors are ordinary wall lumps, so the true wrap is the lump's own height
+    (128 rows for every door in the archive) and this fixed 256 already lets a
+    tall enough post read into the next column.  Left as it was rather than
+    fixed here, so original mode stays byte-identical; scaled so a 4x pack
+    wraps at the same *place*, just with four times the texels. */
+ sp_loopvalue=(256<<texscaleshift)<<FRACBITS;
  if (topy<scrollmin)
   {
-   sp_frac+=(scrollmin-topy)*scale;
+   sp_frac+=(scrollmin-topy)*sp_fracstep;
    if (sp_loopvalue>0)
         while (sp_frac>sp_loopvalue) sp_frac-=sp_loopvalue;
    topy=scrollmin;
@@ -268,16 +275,36 @@ void ScaleMaskedPost()
 
 void MapRow()
 {
-	int spot;
+	/* mr_xfrac/mr_yfrac are 16.16 *world* coordinates, and the shifts turn them
+	   into a texel index.  Originally that was one texel per world unit and a
+	   64x64 flat: >>(FRACBITS-6) & 63*64 for the row, >>FRACBITS & 63 for the
+	   column.  With flatscaleshift texels per unit and a (1<<flatshift)-square
+	   flat both shifts lose that many more bits and both masks widen, which for
+	   a 4x pack is >>6 & 0xFF00 and >>14 & 0xFF.
 
-	while ( mr_count > 0 ) 
+	   Everything is hoisted into locals because these are globals and the
+	   compiler cannot prove `*dest++` does not alias them -- without this it
+	   reloads all four every pixel.  The write-back at the end is load-bearing:
+	   DrawSpans skips the recompute when the next span is contiguous and relies
+	   on this having advanced mr_xfrac/mr_yfrac. */
+	int   ysh = FRACBITS - flatscaleshift - flatshift, xsh = FRACBITS - flatscaleshift;
+	int   ymask = flatmask << flatshift, xmask = flatmask;
+	byte *pic = mr_picture, *cmap = mr_colormap, *dest = mr_dest;
+	fixed_t xf = mr_xfrac, yf = mr_yfrac, xs = mr_xstep, ys = mr_ystep;
+	int   n = mr_count;
+
+	while ( n > 0 )
 	{
-		spot = ((mr_yfrac >> (FRACBITS - 6)) & (63 * 64)) + ((mr_xfrac >> FRACBITS) & 63);
-		*mr_dest++ = mr_colormap[mr_picture[spot]];
-		mr_xfrac += mr_xstep;
-		mr_yfrac += mr_ystep;
-		mr_count--;
-	} 
+		*dest++ = cmap[pic[((yf >> ysh) & ymask) + ((xf >> xsh) & xmask)]];
+		xf += xs;
+		yf += ys;
+		n--;
+	}
+
+	mr_xfrac = xf;
+	mr_yfrac = yf;
+	mr_dest  = dest;
+	mr_count = 0;
 }
 
 
@@ -285,7 +312,7 @@ void DrawSprite(void)
 {
  fixed_t    leftx, scale, xfrac, fracstep;
  fixed_t    shapebottom, topheight, bottomheight;
- int        post, x, topy, bottomy, light, shadow, height, bitshift;
+ int        post, x, topy, bottomy, light, shadow, bitshift, shift;
  special_t  specialtype;
  scalepic_t *pic;
  byte       *collumn;
@@ -330,12 +357,19 @@ void DrawSprite(void)
  pic=(scalepic_t *)span_p->picture;
  sp=(scaleobj_t *)span_p->structure;
 
- bitshift=FRACBITS-sp->scale;
+ /* scaleobj_t.scale is already a texel-density exponent: 1 for almost every
+    sprite (art at 2 texels per world unit), 2 for a few.  A 4x sprite pack is
+    two more doublings on top, applied here rather than by editing the ~40
+    sprite_p->scale assignments in Spawn.c -- which keeps midgetmode and
+    player.holoscale working, and keeps savegames valid, since sprites are
+    persisted by type and respawned rather than restored field by field. */
+ shift=sp->scale+spriteshift;
+ bitshift=FRACBITS-shift;
 
  shapebottom=span_p->y;
  // project the x and height
  scale=FIXEDDIV(SCALE,pointz);
- fracstep=TEXELSTEP(pointz)<<sp->scale;
+ fracstep=TEXELSTEP(pointz)<<shift;
  sp_fracstep=fracstep;
  leftx=span_p->x2;
  leftx-=pic->leftoffset<<bitshift;
@@ -347,8 +381,7 @@ void DrawSprite(void)
    xfrac-=fracstep * x;
    x=0;
    }
- sp_loopvalue=(256<<FRACBITS);
- height=pic->collumnofs[1]-pic->collumnofs[0];
+ sp_loopvalue=(256<<spriteshift)<<FRACBITS;
 
  for (; x<windowWidth; x++)
   {
@@ -359,12 +392,12 @@ void DrawSprite(void)
    if (pointz>=wallz[x] && (pointz>=wallz[x]+TILEUNIT || (specialtype!=st_noclip && specialtype!=st_transparent)))
     continue;
    // If the offset of the columns is zero then there is no data for the post
-   if (pic->collumnofs[post]==0)
+   if (SP_COLOFS(pic,post)==0)
     continue;
-   collumn=(byte *)pic+pic->collumnofs[post];
-   topheight=shapebottom+(*collumn<<bitshift);
-   bottomheight=shapebottom+(*(collumn+1)<<bitshift);
-   collumn+=2;
+   collumn=(byte *)pic+SP_COLOFS(pic,post);
+   topheight=shapebottom+(SP_TOP(collumn)<<bitshift);
+   bottomheight=shapebottom+(SP_BOTTOM(collumn)<<bitshift);
+   collumn+=SP_COLHDR;
    // scale a post
 
    bottomy=CENTERY - (FIXEDMUL(bottomheight,scale)>>FRACBITS);
@@ -454,8 +487,30 @@ void DrawSpans(void)
       if (pointz!=lastz)
        {
 	lastz=pointz;
-	mr_xstep=FIXEDMUL(pointz, xscale);
-	mr_ystep=FIXEDMUL(pointz, yscale);
+	/* The exact form is algebraically FIXEDMUL(pointz,xscale) with
+	   xscale=FIXEDDIV(viewsin,SCALE), minus the intermediate truncation.
+	   SCALE is proj<<FRACBITS, so that FIXEDDIV collapses to an integer
+	   divide and xscale keeps only log2(65536/proj) bits -- 409 max at the
+	   original projection of 160, but just 99 at an HD projection of 659.
+	   The lost ulp is pointz/65536 world units of texture error *per column*
+	   and it accumulates across the row, because the contiguous-span path
+	   below deliberately never resets mr_xfrac.  At 1574 columns and z=200
+	   that is ~5 texels of floor shear, and 4x art makes it four times as
+	   visible.  Two 64-bit multiplies per distinct z, not per pixel.
+
+	   Gated the same way TEXELSTEP is (R_public.h): original mode keeps the
+	   historical expression so its output stays byte-identical, which is the
+	   regression check this port has leaned on throughout. */
+	if (hdmode)
+	 {
+	  mr_xstep=(fixed_t)(((int64_t)pointz*(int64_t)viewsin)/SCALE);
+	  mr_ystep=(fixed_t)(((int64_t)pointz*(int64_t)viewcos)/SCALE);
+	  }
+	else
+	 {
+	  mr_xstep=FIXEDMUL(pointz, xscale);
+	  mr_ystep=FIXEDMUL(pointz, yscale);
+	  }
 	// calculate starting texture point
 	length=FIXEDDIV(pointz, pixelcosine[0]);
 	zeroxfrac=mr_xfrac=viewx+FIXEDMUL(length, zerocosine);
@@ -512,8 +567,8 @@ void DrawSpans(void)
 	  while (px<=w && mr_count>0)
 	   {
 	    x=backtangents[a>>FRACBITS];
-	    x2=center - x + 2*viewproj - 1;
-	    x2&=255;
+	    x2=(center<<skyshift) - x + 2*(viewproj<<skyshift) - 1;
+	    x2&=skymask;
 	    if (*mr_dest==255) *mr_dest=*(backdroplookup[h1]+x2);
 	    a-=afrac;
 	    px++;
@@ -526,8 +581,8 @@ void DrawSpans(void)
 	  a=((TANANGLES/2)<<FRACBITS) + afrac*(px-w);
 	  while (mr_count>0)
 	   {
-	    x1=center + backtangents[a>>FRACBITS];
-	    x1&=255;
+	    x1=(center<<skyshift) + backtangents[a>>FRACBITS];
+	    x1&=skymask;
 	    if (*mr_dest==255) *mr_dest=*(backdroplookup[h1]+x1);
 	    a+=afrac;
 	    px++;
@@ -555,8 +610,8 @@ void DrawSpans(void)
 	while (px<=w && mr_count>0)
 	 {
 	  x=backtangents[a>>FRACBITS];
-	  x2=center - x + 2*viewproj - 1;
-	  x2&=255;
+	  x2=(center<<skyshift) - x + 2*(viewproj<<skyshift) - 1;
+	  x2&=skymask;
 	  *mr_dest=*(backdroplookup[h1]+x2);
 	  a-=afrac;
 	  px++;
@@ -569,8 +624,8 @@ void DrawSpans(void)
 	a=((TANANGLES/2)<<FRACBITS) + afrac*(px-w);
 	while (mr_count>0)
 	 {
-	  x1=center + backtangents[a>>FRACBITS];
-	  x1&=255;
+	  x1=(center<<skyshift) + backtangents[a>>FRACBITS];
+	  x1&=skymask;
 	  *mr_dest=*(backdroplookup[h1]+x1);
 	  a+=afrac;
 	  px++;
@@ -654,8 +709,8 @@ void DrawSpans(void)
 	  while (px<=w && mr_count>0)
 	   {
 	    x=backtangents[a>>FRACBITS];
-	    x2=center - x + 2*viewproj - 1;
-	    x2&=255;
+	    x2=(center<<skyshift) - x + 2*(viewproj<<skyshift) - 1;
+	    x2&=skymask;
 	    if (*mr_dest==255) *mr_dest=*(backdroplookup[h1]+x2);
 	    a-=afrac;
 	    px++;
@@ -668,8 +723,8 @@ void DrawSpans(void)
 	  a=((TANANGLES/2)<<FRACBITS) + afrac*(px-w);
 	  while (mr_count>0)
 	   {
-	    x1=center + backtangents[a>>FRACBITS];
-	    x1&=255;
+	    x1=(center<<skyshift) + backtangents[a>>FRACBITS];
+	    x1&=skymask;
 	    if (*mr_dest==255) *mr_dest=*(backdroplookup[h1]+x1);
 	    a+=afrac;
 	    px++;
